@@ -215,6 +215,113 @@ class PaymentService {
 
         return results;
     }
+
+    // ============================================================
+    // CRUD Operations (for admin panel)
+    // ============================================================
+
+    /** Create payment as 'pending' (admin panel flow — no outbox event) */
+    async createPendingPayment(storeId, data) {
+        return await this.paymentRepo.create(storeId, data);
+    }
+
+    async getPaymentById(storeId, id) {
+        const payment = await this.paymentRepo.findById(storeId, id);
+        if (!payment) throw new NotFoundError('Payment not found');
+        return payment;
+    }
+
+    /**
+     * Update a pending payment.
+     * If status transitions to 'completed', publish payment.completed via outbox.
+     */
+    async updatePayment(storeId, id, data) {
+        const existing = await this.paymentRepo.findById(storeId, id);
+        if (!existing) throw new NotFoundError('Payment not found');
+        if (existing.status !== 'pending') {
+            throw new ValidationError('Only pending payments can be edited');
+        }
+
+        // Status transition: pending → completed → publish event
+        if (data.status === 'completed') {
+            const client = await this.pool.connect();
+            try {
+                await client.query('BEGIN');
+
+                const { rows } = await client.query(
+                    `UPDATE payment SET status = 'completed' WHERE id = $1 AND store_id = $2 RETURNING *`,
+                    [id, storeId]
+                );
+                const completed = rows[0];
+
+                await outbox.insertEvent(client, 'payment.completed', {
+                    paymentId: completed.id,
+                    orderId: completed.reference_id,
+                    storeId,
+                    referenceType: completed.reference_type,
+                    amount: completed.amount,
+                    method: completed.method
+                });
+
+                await client.query('COMMIT');
+                return completed;
+            } catch (error) {
+                await client.query('ROLLBACK');
+                throw error;
+            } finally {
+                client.release();
+            }
+        }
+
+        // Regular edit (amount, method, notes) — no event needed
+        const updated = await this.paymentRepo.update(storeId, id, data);
+        return updated;
+    }
+
+    async deletePayment(storeId, id) {
+        const deleted = await this.paymentRepo.delete(storeId, id);
+        if (!deleted) {
+            throw new ValidationError('Payment not found or cannot be deleted (only pending/cancelled)');
+        }
+        return deleted;
+    }
+
+    async refundPayment(storeId, id) {
+        const existing = await this.paymentRepo.findById(storeId, id);
+        if (!existing) throw new NotFoundError('Payment not found');
+        if (existing.status !== 'completed') {
+            throw new ValidationError('Only completed payments can be refunded');
+        }
+
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            const { rows } = await client.query(
+                'UPDATE payment SET status = $1 WHERE id = $2 AND store_id = $3 RETURNING *',
+                ['refunded', id, storeId]
+            );
+            const refunded = rows[0];
+
+            // Publish refund event via outbox
+            await outbox.insertEvent(client, 'payment.refunded', {
+                paymentId: refunded.id,
+                orderId: refunded.reference_id,
+                storeId,
+                referenceType: refunded.reference_type,
+                amount: refunded.amount,
+                method: refunded.method
+            });
+
+            await client.query('COMMIT');
+            return refunded;
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 }
 
 module.exports = PaymentService;
