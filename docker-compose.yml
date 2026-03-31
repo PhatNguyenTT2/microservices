@@ -1,0 +1,230 @@
+# ============================================================
+# POSMART MICROSERVICES — Docker Compose (Cloud)
+# ============================================================
+# All infrastructure (PostgreSQL, RabbitMQ, Redis) runs on
+# managed cloud services. Only application containers here.
+#
+# Infrastructure:
+#   PostgreSQL → Supabase (DATABASE_URL)
+#   RabbitMQ   → CloudAMQP (RABBITMQ_URL)
+#   Redis      → Redis Cloud (REDIS_URL)
+#
+# Port mapping:
+#   Gateway:8080, Auth:3001, Catalog:3002, Order:3003,
+#   Settings:3004, Supplier:3005, Inventory:3006,
+#   Payment:3007, Chatbot:3008, Statistics:3009
+# ============================================================
+
+services:
+  # ==========================================
+  # API GATEWAY
+  # ==========================================
+
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - auth
+      - catalog
+      - order
+      - settings
+      - supplier
+      - inventory
+      - payment
+      - chatbot
+      - statistics
+
+  # ==========================================
+  # MICROSERVICES
+  # ==========================================
+
+  # Service 1: Auth & Identity (:3001)
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3001
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./services/auth/src:/app/services/auth/src
+      - ./shared:/app/shared
+
+  # Service 2: Catalog (:3002)
+  catalog:
+    build:
+      context: .
+      dockerfile: services/catalog/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3002
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./services/catalog/src:/app/services/catalog/src
+      - ./shared:/app/shared
+
+  # Service 3: Order (:3003)
+  order:
+    build:
+      context: .
+      dockerfile: services/order/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3003
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - INVENTORY_SERVICE_URL=http://inventory:3006
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3003:3003"
+    volumes:
+      - ./services/order/src:/app/services/order/src
+      - ./shared:/app/shared
+
+  # Service 4: Settings (:3004)
+  settings:
+    build:
+      context: .
+      dockerfile: services/settings/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3004
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3004:3004"
+    volumes:
+      - ./services/settings/src:/app/services/settings/src
+      - ./shared:/app/shared
+
+  # Service 5: Supplier (:3005)
+  supplier:
+    build:
+      context: .
+      dockerfile: services/supplier/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3005
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3005:3005"
+    volumes:
+      - ./services/supplier/src:/app/services/supplier/src
+      - ./shared:/app/shared
+
+  # Service 6: Inventory (:3006)
+  inventory:
+    build:
+      context: .
+      dockerfile: services/inventory/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3006
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - CATALOG_SERVICE_URL=http://catalog:3002
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3006:3006"
+    volumes:
+      - ./services/inventory/src:/app/services/inventory/src
+      - ./shared:/app/shared
+
+  # Service 7: Payment (:3007)
+  payment:
+    build:
+      context: .
+      dockerfile: services/payment/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3007
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - VNP_TMNCODE=${VNP_TMNCODE}
+      - VNP_HASHSECRET=${VNP_HASHSECRET}
+      - VNP_URL=${VNP_URL:-https://sandbox.vnpayment.vn}
+      - VNP_TEST_MODE=${VNP_TEST_MODE:-true}
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3007:3007"
+    volumes:
+      - ./services/payment/src:/app/services/payment/src
+      - ./shared:/app/shared
+
+  # Service 8: AI Chatbot (:3008)
+  chatbot:
+    build:
+      context: .
+      dockerfile: services/chatbot/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3008
+      - DATABASE_URL=${DATABASE_URL}
+      - DB_SSL=${DB_SSL:-true}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - HF_ACCESS_TOKEN=${HF_ACCESS_TOKEN}
+      - HF_MODEL=${HF_MODEL:-microsoft/Phi-3-mini-4k-instruct}
+      - CATALOG_SERVICE_URL=http://catalog:3002
+      - INVENTORY_SERVICE_URL=http://inventory:3006
+      - ORDER_SERVICE_URL=http://order:3003
+      - AUTH_SERVICE_URL=http://auth:3001
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3008:3008"
+    volumes:
+      - ./services/chatbot/src:/app/services/chatbot/src
+      - ./shared:/app/shared
+
+  # Service 9: Statistics & Analytics (:3009)
+  statistics:
+    build:
+      context: .
+      dockerfile: services/statistics/Dockerfile
+    restart: on-failure
+    environment:
+      - PORT=3009
+      - REDIS_URL=${REDIS_URL}
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - ORDER_URL=http://order:3003
+      - CATALOG_URL=http://catalog:3002
+      - SUPPLIER_URL=http://supplier:3005
+      - INVENTORY_URL=http://inventory:3006
+      - AUTH_URL=http://auth:3001
+      - NODE_ENV=${NODE_ENV:-production}
+    ports:
+      - "3009:3009"
+    volumes:
+      - ./services/statistics/src:/app/services/statistics/src
+      - ./shared:/app/shared

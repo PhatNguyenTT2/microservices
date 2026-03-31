@@ -1,0 +1,30 @@
+{
+  "name": "@posmart/microservices",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "shared/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev:auth": "npm run dev --workspace=@posmart/auth-service",
+    "dev:settings": "npm run dev --workspace=@posmart/settings-service",
+    "dev:catalog": "npm run dev --workspace=@posmart/catalog-service",
+    "dev:supplier": "npm run dev --workspace=@posmart/supplier-service",
+    "dev:inventory": "npm run dev --workspace=@posmart/inventory-service",
+    "dev:order": "npm run dev --workspace=@posmart/order-service",
+    "dev:payment": "npm run dev --workspace=@posmart/payment-service",
+    "dev:chatbot": "npm run dev --workspace=@posmart/chatbot-service",
+    "test": "npm test --workspaces --if-present",
+    "test:auth": "npm test --workspace=@posmart/auth-service",
+    "test:settings": "npm test --workspace=@posmart/settings-service",
+    "test:catalog": "npm test --workspace=@posmart/catalog-service",
+    "test:supplier": "npm test --workspace=@posmart/supplier-service",
+    "test:inventory": "npm test --workspace=@posmart/inventory-service",
+    "test:order": "npm test --workspace=@posmart/order-service",
+    "test:payment": "npm test --workspace=@posmart/payment-service",
+    "test:chatbot": "npm test --workspace=@posmart/chatbot-service",
+    "install:all": "npm install --workspaces",
+    "healthcheck": "node scripts/healthcheck.js"
+  }
+}

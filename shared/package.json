@@ -1,0 +1,14 @@
+{
+  "name": "@posmart/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared libraries for POSMART microservices",
+  "main": "index.js",
+  "dependencies": {
+    "pg": "^8.13.0",
+    "amqplib": "^0.10.4",
+    "jsonwebtoken": "^9.0.2",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.3.0"
+  }
+}

@@ -1,0 +1,7 @@
+/**
+ * Mock: shared/common/constants
+ */
+module.exports = {
+  SALT_ROUNDS: 10,
+  TOKEN_EXPIRY: { ACCESS: '7d', POS: '12h', REFRESH_MS: 604800000 }
+};
