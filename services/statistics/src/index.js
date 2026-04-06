@@ -1,5 +1,6 @@
 const logger = require('../../../shared/common/logger');
 const eventBus = require('../../../shared/event-bus');
+const EVENT = require('../../../shared/event-bus/eventTypes');
 const cache = require('./cache/redis');
 
 // Clients
@@ -31,19 +32,19 @@ async function start() {
     const statisticsService = new StatisticsService({ orderClient, catalogClient, authClient });
 
     // 5. Subscribe to cache invalidation events
-    await eventBus.subscribe(SERVICE_NAME, 'order.created', async () => {
-      logger.info('order.created → invalidating dashboard cache');
+    await eventBus.subscribe(SERVICE_NAME, EVENT.ORDER_SHIPPING, async () => {
+      logger.info('order.shipping → invalidating dashboard cache');
       await cache.invalidate('stats:dashboard:*');
       await cache.invalidate('stats:sales:*');
     });
 
-    await eventBus.subscribe(SERVICE_NAME, 'payment.completed', async () => {
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PAYMENT_COMPLETED, async () => {
       logger.info('payment.completed → invalidating dashboard cache');
       await cache.invalidate('stats:dashboard:*');
       await cache.invalidate('stats:sales:*');
     });
 
-    await eventBus.subscribe(SERVICE_NAME, 'inventory.updated', async () => {
+    await eventBus.subscribe(SERVICE_NAME, EVENT.INVENTORY_UPDATED, async () => {
       logger.info('inventory.updated → invalidating inventory cache');
       await cache.invalidate('stats:inventory:*');
     });

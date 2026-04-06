@@ -55,6 +55,26 @@ function createBatchRouter(batchRepo) {
     }
   });
 
+  // Get single batch by ID (includes serverTime for expiry validation)
+  router.get('/:id', verifyToken, async (req, res, next) => {
+    try {
+      const storeId = req.user ? req.user.storeId : 1;
+      const batchId = parseInt(req.params.id);
+
+      const batch = await batchRepo.findById(storeId, batchId);
+      if (!batch) {
+        return res.status(404).json({ success: false, error: 'Batch not found' });
+      }
+
+      res.json({
+        success: true,
+        data: { ...batch, serverTime: new Date().toISOString() }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Saga compensation: delete orphaned batch (CASCADE cleans inventory_item + movement)
   router.delete('/:id', verifyToken, async (req, res, next) => {
     try {

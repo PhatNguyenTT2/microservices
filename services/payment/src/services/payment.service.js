@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const querystring = require('querystring');
 const { ValidationError, NotFoundError, AppError } = require('../../../../shared/common/errors');
 const outbox = require('../../../../shared/outbox');
+const EVENT = require('../../../../shared/event-bus/eventTypes');
 
 class PaymentService {
     constructor(paymentRepo, vnpayRepo, pool, eventBus) {
@@ -21,26 +22,46 @@ class PaymentService {
             throw new ValidationError('Use createVNPayUrl for VNPay method');
         }
 
+        // Type safety — reference_id may arrive as string from frontend select
+        const referenceId = parseInt(data.reference_id, 10);
+        if (isNaN(referenceId)) {
+            throw new ValidationError('Invalid reference_id');
+        }
+
         const client = await this.pool.connect();
         try {
             await client.query('BEGIN');
 
-            // 1. Insert payment record
+            // 1. Insert payment record (including items + delivery_type)
             const { rows } = await client.query(`
-                INSERT INTO payment (store_id, amount, method, status, reference_type, reference_id, created_by, notes)
-                VALUES ($1, $2, $3, 'completed', $4, $5, $6, $7) RETURNING *
-            `, [storeId, data.amount, data.method, data.reference_type, data.reference_id, data.created_by, data.notes]);
+                INSERT INTO payment (store_id, amount, method, status, reference_type, reference_id, created_by, notes, items, delivery_type)
+                VALUES ($1, $2, $3, 'completed', $4, $5, $6, $7, $8, $9) RETURNING *
+            `, [storeId, data.amount, data.method, data.reference_type, referenceId, data.created_by, data.notes,
+                JSON.stringify(data.items || []),
+                data.deliveryType || 'pickup'
+            ]);
             const payment = rows[0];
 
-            // 2. Insert event into outbox (same transaction — atomic!)
-            await outbox.insertEvent(client, 'payment.completed', {
+            // 2. Calculate total paid so far for this reference
+            const { rows: paidRows } = await client.query(
+                `SELECT COALESCE(SUM(amount), 0) as total_paid FROM payment
+                 WHERE reference_id = $1 AND reference_type = $2 AND store_id = $3 AND status = 'completed'`,
+                [referenceId, data.reference_type, storeId]
+            );
+            const totalPaidSoFar = parseFloat(paidRows[0].total_paid);
+
+            // 3. Insert event into outbox (same transaction — atomic!)
+            await outbox.insertEvent(client, EVENT.PAYMENT_COMPLETED, {
                 paymentId: payment.id,
-                orderId: data.reference_id,
+                orderId: referenceId,
                 storeId,
                 referenceType: data.reference_type,
                 amount: data.amount,
-                method: data.method
-            });
+                method: data.method,
+                items: data.items || [],
+                deliveryType: data.deliveryType || 'pickup',
+                totalPaidSoFar
+            }, 'payment-service');
 
             await client.query('COMMIT');
             return payment;
@@ -156,21 +177,21 @@ class PaymentService {
 
             // Insert event into outbox (same transaction — atomic!)
             if (isSuccess) {
-                await outbox.insertEvent(client, 'payment.completed', {
+                await outbox.insertEvent(client, EVENT.PAYMENT_COMPLETED, {
                     paymentId: vnpayTxn.payment_id,
                     orderId: finalPayment.reference_id || vnpayTxn.reference_id,
                     storeId,
-                    referenceType: 'sale_order',
+                    referenceType: 'SaleOrder',
                     amount: finalPayment.amount,
                     method: 'vnpay'
-                });
+                }, 'payment-service');
             } else {
-                await outbox.insertEvent(client, 'payment.failed', {
+                await outbox.insertEvent(client, EVENT.PAYMENT_FAILED, {
                     paymentId: vnpayTxn.payment_id,
                     orderId: vnpayTxn.reference_id,
                     storeId,
                     reason: `VNPay response code: ${ipnData.vnp_ResponseCode}`
-                });
+                }, 'payment-service');
             }
 
             await client.query('COMMIT');
@@ -199,7 +220,7 @@ class PaymentService {
 
                 // 3. Publish timeout event for saga compensation
                 if (this.eventBus) {
-                    await this.eventBus.publish('payment.timeout', {
+                    await this.eventBus.publish(EVENT.PAYMENT_TIMEOUT, {
                         paymentId: txn.payment_id,
                         orderId: txn.order_id,
                         storeId: txn.store_id,
@@ -254,14 +275,33 @@ class PaymentService {
                 );
                 const completed = rows[0];
 
-                await outbox.insertEvent(client, 'payment.completed', {
+                // Read items from DB (stored when payment was created)
+                let storedItems = [];
+                try {
+                    storedItems = typeof completed.items === 'string'
+                        ? JSON.parse(completed.items)
+                        : (completed.items || []);
+                } catch (e) { storedItems = []; }
+
+                // Calculate total paid so far for this reference
+                const { rows: paidRows } = await client.query(
+                    `SELECT COALESCE(SUM(amount), 0) as total_paid FROM payment
+                     WHERE reference_id = $1 AND reference_type = $2 AND store_id = $3 AND status = 'completed'`,
+                    [completed.reference_id, completed.reference_type, storeId]
+                );
+                const totalPaidSoFar = parseFloat(paidRows[0].total_paid);
+
+                await outbox.insertEvent(client, EVENT.PAYMENT_COMPLETED, {
                     paymentId: completed.id,
-                    orderId: completed.reference_id,
+                    orderId: parseInt(completed.reference_id, 10),
                     storeId,
                     referenceType: completed.reference_type,
                     amount: completed.amount,
-                    method: completed.method
-                });
+                    method: completed.method,
+                    items: storedItems,
+                    deliveryType: completed.delivery_type || 'pickup',
+                    totalPaidSoFar
+                }, 'payment-service');
 
                 await client.query('COMMIT');
                 return completed;
@@ -303,15 +343,25 @@ class PaymentService {
             );
             const refunded = rows[0];
 
-            // Publish refund event via outbox
-            await outbox.insertEvent(client, 'payment.refunded', {
+            // Check if ALL payments for this reference are now refunded
+            const { rows: allPayments } = await client.query(
+                `SELECT status FROM payment 
+                 WHERE reference_id = $1 AND reference_type = $2 AND store_id = $3
+                   AND status IN ('completed', 'refunded')`,
+                [refunded.reference_id, refunded.reference_type, storeId]
+            );
+            const allRefunded = allPayments.length > 0 &&
+                allPayments.every(p => p.status === 'refunded');
+
+            // Publish refund event (NO items — inventory return is manual)
+            await outbox.insertEvent(client, EVENT.PAYMENT_REFUNDED, {
                 paymentId: refunded.id,
                 orderId: refunded.reference_id,
                 storeId,
                 referenceType: refunded.reference_type,
                 amount: refunded.amount,
-                method: refunded.method
-            });
+                allRefunded
+            }, 'payment-service');
 
             await client.query('COMMIT');
             return refunded;

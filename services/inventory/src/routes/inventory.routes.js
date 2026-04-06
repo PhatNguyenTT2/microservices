@@ -343,6 +343,29 @@ function createInventoryRouter(inventoryService, inventoryRepo, { catalogService
         }
     });
 
+    /**
+     * POST /return-stock — Return items to warehouse (manual refund return)
+     * Body: { items: [{ batchId, locationId, quantity }], reason }
+     */
+    router.post('/return-stock', verifyToken, async (req, res, next) => {
+        try {
+            const storeId = req.user ? req.user.storeId : 1;
+            const { items, reason } = req.body;
+
+            if (!items || !Array.isArray(items) || items.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: { message: 'items array is required' }
+                });
+            }
+
+            const result = await inventoryService.returnStock(storeId, items, reason || 'manual_refund_return');
+            res.json({ success: true, data: result });
+        } catch (error) {
+            next(error);
+        }
+    });
+
     return router;
 }
 

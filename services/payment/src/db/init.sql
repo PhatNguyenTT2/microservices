@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS payment (
     reference_type TEXT NOT NULL CHECK (reference_type IN ('SaleOrder', 'PurchaseOrder')),
     reference_id BIGINT NOT NULL,
     
+    -- Order items snapshot (for inventory deduction on completion)
+    items JSONB NOT NULL DEFAULT '[]',
+    delivery_type TEXT NOT NULL DEFAULT 'pickup',
+    
     payment_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by BIGINT,                        -- NV thu tiền
     notes TEXT
@@ -59,9 +63,11 @@ CREATE INDEX IF NOT EXISTS idx_vnpay_status ON vnpay_transaction(status);
 -- ==========================================
 CREATE TABLE IF NOT EXISTS processed_events (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-    event_id TEXT UNIQUE NOT NULL,
+    event_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
-    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    service_name TEXT NOT NULL DEFAULT 'unknown',
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(event_id, service_name)
 );
 CREATE INDEX IF NOT EXISTS idx_processed_events_id ON processed_events(event_id);
 
@@ -76,3 +82,35 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     published_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished ON outbox_events(id) WHERE published_at IS NULL;
+
+-- ==========================================
+-- MIGRATION: Add items + delivery_type columns
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE payment ADD COLUMN IF NOT EXISTS items JSONB NOT NULL DEFAULT '[]';
+    ALTER TABLE payment ADD COLUMN IF NOT EXISTS delivery_type TEXT NOT NULL DEFAULT 'pickup';
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+-- ==========================================
+-- MIGRATION: Add service_name to outbox for shared-DB isolation
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE outbox_events ADD COLUMN service_name TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_outbox_service ON outbox_events(service_name) WHERE published_at IS NULL;
+
+-- ==========================================
+-- MIGRATION: Fix processed_events for shared-DB isolation
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE processed_events ADD COLUMN service_name TEXT NOT NULL DEFAULT 'unknown';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE processed_events DROP CONSTRAINT IF EXISTS processed_events_event_id_key;
+    ALTER TABLE processed_events ADD CONSTRAINT processed_events_event_service_unique UNIQUE (event_id, service_name);
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;

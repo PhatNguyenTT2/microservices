@@ -1,6 +1,8 @@
 const { Pool } = require('pg');
 const logger = require('../common/logger');
 
+let _pool = null;
+
 /**
  * Create a PostgreSQL connection pool.
  * Supports 2 modes:
@@ -30,8 +32,11 @@ function createPool(dbName) {
       port: parseInt(url.port || '5432', 10),
       database,
       ssl: useSSL ? { rejectUnauthorized: false } : false,
-      max: 5,
-      idleTimeoutMillis: 30000,
+      // Supabase Session Mode (port 5432) limits total connections (~15 free tier).
+      // 8 services × 2 = 16 max. Keep low to avoid MaxClientsInSessionMode errors.
+      // For higher throughput, switch to Transaction Mode (port 6543).
+      max: parseInt(process.env.DB_POOL_MAX || '2', 10),
+      idleTimeoutMillis: 10000,
       connectionTimeoutMillis: 10000
     };
     logger.info({ host: url.hostname, db: database, ssl: useSSL }, 'PostgreSQL: using URL connection');
@@ -56,6 +61,7 @@ function createPool(dbName) {
     logger.error({ err, db: poolConfig.database }, 'Unexpected PostgreSQL pool error');
   });
 
+  _pool = pool;
   return pool;
 }
 
@@ -88,7 +94,13 @@ async function checkHealth(pool) {
  * Graceful shutdown.
  */
 async function closePool(pool) {
-  await pool.end();
+  const target = pool || _pool;
+  if (!target) {
+    logger.warn('closePool called but no pool exists');
+    return;
+  }
+  await target.end();
+  _pool = null;
   logger.info('PostgreSQL pool closed');
 }
 

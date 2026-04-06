@@ -78,24 +78,8 @@ function createOrderRouter(orderService) {
     }
   });
 
-  // Create online order (Saga flow — triggers reserve → payment → confirm)
-  router.post('/online', verifyToken, async (req, res, next) => {
-    try {
-      const storeId = req.user?.storeId || 1;
-      const userId = req.user?.id || 1;
-      const jwtToken = req.headers.authorization?.replace('Bearer ', '');
-
-      const order = await orderService.createOnlineOrder(storeId, req.body, userId, jwtToken);
-
-      res.status(201).json({
-        status: 'success',
-        message: 'Online order created — stock reservation in progress',
-        data: { order }
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+  // NOTE: POST /online REMOVED — simplified flow uses POST / for all orders
+  // All orders start as 'draft' regardless of delivery type
 
   // Update draft order items (delete old → FEFO re-allocate → insert new)
   router.put('/:id/items', verifyToken, async (req, res, next) => {

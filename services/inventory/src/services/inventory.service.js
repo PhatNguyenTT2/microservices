@@ -410,6 +410,67 @@ class InventoryService {
             client.release();
         }
     }
+
+    /**
+     * Return stock to on_hand after refund.
+     * Goods go to counter/warehouse, NOT directly to shelf.
+     * Staff uses moveStockToShelf() later to restock display.
+     */
+    async returnStock(storeId, items, reason = 'refund_return') {
+        if (!items || items.length === 0) return { message: 'No items to return' };
+
+        const client = await this.pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            for (const { batchId, locationId, quantity } of items) {
+                if (quantity <= 0) continue;
+
+                const batch = await this.batchRepo.findById(storeId, batchId);
+                if (!batch) {
+                    throw new NotFoundError(`Batch ${batchId} not found in store ${storeId}`);
+                }
+
+                // Defense-in-depth: reject if batch expired
+                if (batch.expiry_date && new Date(batch.expiry_date) < new Date()) {
+                    throw new ValidationError(
+                        `Batch #${batchId} has expired. Stock return rejected.`,
+                        { code: 'BATCH_EXPIRED', batchId }
+                    );
+                }
+
+                const item = await this.inventoryRepo.findItemForUpdateWithClient(
+                    client, batchId, locationId
+                );
+                if (!item) continue; // best-effort
+
+                // Return to on_hand (NOT on_shelf)
+                // Goods are at counter, staff will moveStockToShelf() later
+                await this.inventoryRepo.updateItemQuantitiesWithClient(
+                    client, item.id,
+                    quantity,  // on_hand += qty
+                    0,         // on_shelf stays
+                    0          // reserved stays
+                );
+
+                await this.inventoryRepo.recordMovementWithClient(client, {
+                    inventory_item_id: item.id,
+                    movement_type: 'in',
+                    quantity: quantity,
+                    reason: reason,
+                    performed_by: null
+                });
+            }
+
+            await client.query('COMMIT');
+            return { message: 'Stock returned to warehouse (on_hand)' };
+        } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+        } finally {
+            client.release();
+        }
+    }
 }
 
 module.exports = InventoryService;

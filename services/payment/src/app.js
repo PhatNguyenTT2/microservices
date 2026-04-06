@@ -8,7 +8,8 @@ function createApp({ paymentService }) {
   const app = express();
 
   app.use(helmet());
-  app.use(cors());
+  const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173').split(',').map(o => o.trim());
+  app.use(cors({ origin: allowedOrigins, credentials: true }));
   app.use(express.json());
 
   app.use('/', healthRoutes);

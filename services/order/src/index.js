@@ -3,6 +3,7 @@ const path = require('path');
 const logger = require('../../../shared/common/logger');
 const { createPool, closePool } = require('../../../shared/db');
 const eventBus = require('../../../shared/event-bus');
+const EVENT = require('../../../shared/event-bus/eventTypes');
 
 // Repositories
 const OrderRepository = require('./repositories/order.repository');
@@ -38,16 +39,34 @@ async function start() {
     const orderService = new OrderService(orderRepo, orderDetailRepo, pool);
 
     // 4. Subscribe to events
-    await eventBus.subscribe(SERVICE_NAME, 'payment.completed', async (message) => {
-      const { orderId, storeId } = message.data;
+    // =============================================
+    // payment.completed → update order status
+    // POS(pickup):  draft → delivered, paid
+    // Online(delivery): draft → shipping, paid
+    // =============================================
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PAYMENT_COMPLETED, async (message) => {
+      const { orderId, storeId, deliveryType, referenceType } = message.data;
       const eventId = message.id;
-      logger.info({ orderId, storeId, eventId }, 'Received payment.completed → updating order status');
+
+      // Only handle SaleOrder references (skip PurchaseOrder)
+      if (referenceType && referenceType !== 'SaleOrder') return;
+
+      // Type safety — orderId/storeId may arrive as strings from JSON
+      const safeOrderId = parseInt(orderId, 10);
+      const safeStoreId = parseInt(storeId, 10);
+
+      logger.info({ orderId: safeOrderId, storeId: safeStoreId, deliveryType, eventId, rawOrderId: orderId, rawStoreId: storeId }, 'Received payment.completed → updating order status');
+
+      if (isNaN(safeOrderId) || isNaN(safeStoreId)) {
+        logger.error({ orderId, storeId, eventId }, 'INVALID orderId or storeId — cannot process');
+        return;
+      }
 
       // Idempotency check
       try {
         await pool.query(
-          'INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)',
-          [eventId, 'payment.completed']
+          'INSERT INTO processed_events (event_id, event_type, service_name) VALUES ($1, $2, $3)',
+          [eventId, EVENT.PAYMENT_COMPLETED, SERVICE_NAME]
         );
       } catch (dupErr) {
         if (dupErr.code === '23505') {
@@ -58,23 +77,27 @@ async function start() {
       }
 
       try {
-        await orderService.updateOrderStatus(storeId, orderId, 'completed', 'paid');
-        logger.info({ orderId }, 'Order status updated to completed/paid');
+        const targetStatus = deliveryType === 'delivery' ? 'shipping' : 'delivered';
+        logger.info({ orderId: safeOrderId, storeId: safeStoreId, targetStatus, paymentStatus: 'paid' }, 'About to call updateOrderStatus');
+
+        await orderService.updateOrderStatus(safeStoreId, safeOrderId, targetStatus, 'paid');
+        logger.info({ orderId: safeOrderId, targetStatus }, 'Order status updated successfully');
       } catch (err) {
-        logger.error({ err, orderId }, 'Failed to update order status on payment.completed');
+        logger.error({ err: err.message, stack: err.stack, orderId: safeOrderId, storeId: safeStoreId }, 'CRITICAL: Failed to update order status on payment.completed');
+        throw err;
       }
     });
 
-    await eventBus.subscribe(SERVICE_NAME, 'payment.failed', async (message) => {
+    // payment.failed → cancel order
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PAYMENT_FAILED, async (message) => {
       const { orderId, storeId, reason } = message.data;
       const eventId = message.id;
       logger.info({ orderId, storeId, reason, eventId }, 'Received payment.failed');
 
-      // Idempotency check
       try {
         await pool.query(
-          'INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)',
-          [eventId, 'payment.failed']
+          'INSERT INTO processed_events (event_id, event_type, service_name) VALUES ($1, $2, $3)',
+          [eventId, EVENT.PAYMENT_FAILED, SERVICE_NAME]
         );
       } catch (dupErr) {
         if (dupErr.code === '23505') {
@@ -93,16 +116,15 @@ async function start() {
     });
 
     // Saga compensation: inventory deduct failed → revert order
-    await eventBus.subscribe(SERVICE_NAME, 'inventory.deduct_failed', async (message) => {
+    await eventBus.subscribe(SERVICE_NAME, EVENT.INVENTORY_DEDUCT_FAILED, async (message) => {
       const { orderId, storeId, reason } = message.data;
       const eventId = message.id;
       logger.info({ orderId, storeId, reason, eventId }, 'Received inventory.deduct_failed → reverting order');
 
-      // Idempotency check
       try {
         await pool.query(
-          'INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)',
-          [eventId, 'inventory.deduct_failed']
+          'INSERT INTO processed_events (event_id, event_type, service_name) VALUES ($1, $2, $3)',
+          [eventId, EVENT.INVENTORY_DEDUCT_FAILED, SERVICE_NAME]
         );
       } catch (dupErr) {
         if (dupErr.code === '23505') {
@@ -120,56 +142,14 @@ async function start() {
       }
     });
 
-    // Saga Phase 1: stock reserved → update order to reserved
-    await eventBus.subscribe(SERVICE_NAME, 'stock.reserved', async (message) => {
-      const { orderId, storeId } = message.data;
-      const eventId = message.id;
-      logger.info({ orderId, storeId, eventId }, 'Received stock.reserved → updating order to reserved');
-
-      try {
-        await pool.query('INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)', [eventId, 'stock.reserved']);
-      } catch (dupErr) {
-        if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
-        throw dupErr;
-      }
-
-      try {
-        await orderService.updateOrderStatus(storeId, orderId, 'reserved', null);
-        logger.info({ orderId }, 'Order status updated to reserved');
-      } catch (err) {
-        logger.error({ err, orderId }, 'Failed to update order to reserved');
-      }
-    });
-
-    // Saga Phase 1: stock reservation failed → cancel order
-    await eventBus.subscribe(SERVICE_NAME, 'stock.reservation_failed', async (message) => {
-      const { orderId, storeId, reason } = message.data;
-      const eventId = message.id;
-      logger.info({ orderId, storeId, reason, eventId }, 'Received stock.reservation_failed → cancelling order');
-
-      try {
-        await pool.query('INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)', [eventId, 'stock.reservation_failed']);
-      } catch (dupErr) {
-        if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
-        throw dupErr;
-      }
-
-      try {
-        await orderService.updateOrderStatus(storeId, orderId, 'cancelled', null);
-        logger.info({ orderId }, 'Order cancelled due to stock reservation failure');
-      } catch (err) {
-        logger.error({ err, orderId }, 'Failed to cancel order on stock.reservation_failed');
-      }
-    });
-
-    // Saga: payment.timeout → cancel order (VNPay expired)
-    await eventBus.subscribe(SERVICE_NAME, 'payment.timeout', async (message) => {
+    // payment.timeout → cancel order (VNPay expired)
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PAYMENT_TIMEOUT, async (message) => {
       const { orderId, storeId, reason } = message.data;
       const eventId = message.id;
       logger.info({ orderId, storeId, reason, eventId }, 'Received payment.timeout → cancelling order');
 
       try {
-        await pool.query('INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)', [eventId, 'payment.timeout']);
+        await pool.query('INSERT INTO processed_events (event_id, event_type, service_name) VALUES ($1, $2, $3)', [eventId, EVENT.PAYMENT_TIMEOUT, SERVICE_NAME]);
       } catch (dupErr) {
         if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
         throw dupErr;
@@ -183,6 +163,66 @@ async function start() {
       }
     });
 
+    // Refund: payment.refunded → update order payment_status
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PAYMENT_REFUNDED, async (message) => {
+      const { orderId, storeId, referenceType, allRefunded } = message.data;
+      const eventId = message.id;
+
+      if (referenceType !== 'SaleOrder') {
+        logger.info({ orderId, referenceType, eventId }, 'payment.refunded skipped: not SaleOrder');
+        return;
+      }
+
+      logger.info({ orderId, storeId, eventId, allRefunded }, 'Received payment.refunded');
+
+      try {
+        await pool.query(
+          'INSERT INTO processed_events (event_id, event_type, service_name) VALUES ($1, $2, $3)',
+          [eventId, EVENT.PAYMENT_REFUNDED, SERVICE_NAME]
+        );
+      } catch (dupErr) {
+        if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
+        throw dupErr;
+      }
+
+      try {
+        const { rows } = await pool.query(
+          'SELECT id, status, payment_status FROM sale_order WHERE id = $1 AND store_id = $2',
+          [orderId, storeId]
+        );
+        const order = rows[0];
+
+        if (!order) {
+          logger.warn({ orderId, storeId }, 'payment.refunded: order not found');
+          return;
+        }
+
+        if (!['delivered', 'shipping'].includes(order.status)) {
+          logger.warn({ orderId, status: order.status }, 'payment.refunded: order status not eligible');
+          return;
+        }
+
+        const newPaymentStatus = allRefunded ? 'refunded' : 'partial_refund';
+
+        const updateResult = await pool.query(
+          `UPDATE sale_order SET payment_status = $1 WHERE id = $2 AND store_id = $3 RETURNING id, payment_status`,
+          [newPaymentStatus, orderId, storeId]
+        );
+
+        if (updateResult.rows[0]) {
+          logger.info({ orderId, newPaymentStatus: updateResult.rows[0].payment_status }, `Order payment_status updated to ${newPaymentStatus}`);
+        } else {
+          logger.error({ orderId }, 'payment.refunded: UPDATE returned no rows');
+        }
+      } catch (err) {
+        logger.error({ err: err.message, code: err.code, detail: err.detail, orderId }, 'Failed to process payment.refunded in order');
+      }
+    });
+
+    // NOTE: stock.reserved and stock.reservation_failed subscriptions REMOVED
+    // New simplified flow: draft → (payment.completed) → shipping/delivered
+    // No more pending/reserved statuses
+
     // 5. Create Express app
     const createApp = require('./app');
     const app = createApp({ orderService, orderDetailRepo });
@@ -193,9 +233,9 @@ async function start() {
       logger.info(`${SERVICE_NAME} running on port ${PORT}`);
     });
 
-    // 7. Saga §5.3: Outbox poller
+    // 7. Outbox poller — CRITICAL: pass SERVICE_NAME for shared-DB isolation
     const outbox = require('../../../shared/outbox');
-    const outboxPoller = outbox.startPoller(pool, eventBus, 3000);
+    const outboxPoller = outbox.startPoller(pool, eventBus, 3000, SERVICE_NAME);
 
     // Graceful shutdown
     const shutdown = async (signal) => {

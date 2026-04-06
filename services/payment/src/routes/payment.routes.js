@@ -1,4 +1,5 @@
 const express = require('express');
+const { verifyToken } = require('../../../../shared/auth-middleware');
 
 /**
  * Format DB row (snake_case) → frontend (camelCase)
@@ -37,9 +38,9 @@ function createPaymentRouter(paymentService) {
     const router = express.Router();
 
     // GET /payments — list all payments
-    router.get('/', async (req, res, next) => {
+    router.get('/', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const filters = {};
 
             if (req.query.referenceType) {
@@ -57,7 +58,7 @@ function createPaymentRouter(paymentService) {
 
             const payments = await paymentService.getPayments(storeId, filters);
             res.json({
-                success: true,
+                status: 'success',
                 data: { payments: payments.map(formatPayment) }
             });
         } catch (error) {
@@ -66,12 +67,12 @@ function createPaymentRouter(paymentService) {
     });
 
     // GET /payments/:id — get single payment
-    router.get('/:id', async (req, res, next) => {
+    router.get('/:id', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const payment = await paymentService.getPaymentById(storeId, req.params.id);
             res.json({
-                success: true,
+                status: 'success',
                 data: { payment: formatPayment(payment) }
             });
         } catch (error) {
@@ -80,21 +81,23 @@ function createPaymentRouter(paymentService) {
     });
 
     // POST /payments/direct — create cash/bank_transfer payment
-    router.post('/direct', async (req, res, next) => {
+    router.post('/direct', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const data = {
                 ...req.body,
                 reference_type: req.body.reference_type || toDbReferenceType(req.body.referenceType),
                 reference_id: req.body.reference_id || req.body.referenceId,
                 method: req.body.method || req.body.paymentMethod,
-                created_by: req.user ? req.user.id : 1
+                created_by: req.user.id,
+                items: req.body.items || [],
+                deliveryType: req.body.deliveryType || 'pickup'
             };
 
             const payment = await paymentService.createDirectPayment(storeId, data);
 
             res.status(201).json({
-                success: true,
+                status: 'success',
                 message: 'Direct payment completed successfully',
                 data: { payment: formatPayment(payment) }
             });
@@ -105,9 +108,9 @@ function createPaymentRouter(paymentService) {
 
     // POST /payments — create payment as pending (admin panel flow)
     // For auto-completed payments, use POST /payments/direct
-    router.post('/', async (req, res, next) => {
+    router.post('/', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const method = req.body.method || req.body.paymentMethod || 'cash';
 
             if (method === 'vnpay') {
@@ -118,11 +121,11 @@ function createPaymentRouter(paymentService) {
                     reference_type: req.body.reference_type || toDbReferenceType(req.body.referenceType),
                     reference_id: req.body.reference_id || req.body.referenceId,
                     notes: req.body.notes,
-                    created_by: req.user ? req.user.id : 1
+                    created_by: req.user.id
                 };
                 const result = await paymentService.createVNPayUrl(storeId, data, ipAddr);
                 return res.status(201).json({
-                    success: true,
+                    status: 'success',
                     message: 'VNPay URL created',
                     data: { payment: formatPayment(result.payment), paymentUrl: result.paymentUrl }
                 });
@@ -135,11 +138,13 @@ function createPaymentRouter(paymentService) {
                 reference_type: req.body.reference_type || toDbReferenceType(req.body.referenceType),
                 reference_id: req.body.reference_id || req.body.referenceId,
                 notes: req.body.notes,
-                created_by: req.user ? req.user.id : 1
+                created_by: req.user.id,
+                items: req.body.items || [],
+                deliveryType: req.body.deliveryType || 'pickup'
             });
 
             res.status(201).json({
-                success: true,
+                status: 'success',
                 message: 'Payment created successfully',
                 data: { payment: formatPayment(payment) }
             });
@@ -149,9 +154,9 @@ function createPaymentRouter(paymentService) {
     });
 
     // PUT /payments/:id — update pending payment
-    router.put('/:id', async (req, res, next) => {
+    router.put('/:id', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const updateData = {};
 
             if (req.body.amount !== undefined) updateData.amount = req.body.amount;
@@ -160,10 +165,12 @@ function createPaymentRouter(paymentService) {
             }
             if (req.body.notes !== undefined) updateData.notes = req.body.notes;
             if (req.body.status) updateData.status = req.body.status;
+            if (req.body.items) updateData.items = req.body.items;
+            if (req.body.deliveryType) updateData.deliveryType = req.body.deliveryType;
 
             const payment = await paymentService.updatePayment(storeId, req.params.id, updateData);
             res.json({
-                success: true,
+                status: 'success',
                 message: 'Payment updated successfully',
                 data: { payment: formatPayment(payment) }
             });
@@ -173,12 +180,12 @@ function createPaymentRouter(paymentService) {
     });
 
     // DELETE /payments/:id — delete pending/cancelled payment
-    router.delete('/:id', async (req, res, next) => {
+    router.delete('/:id', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const payment = await paymentService.deletePayment(storeId, req.params.id);
             res.json({
-                success: true,
+                status: 'success',
                 message: 'Payment deleted successfully',
                 data: { payment: formatPayment(payment) }
             });
@@ -188,12 +195,12 @@ function createPaymentRouter(paymentService) {
     });
 
     // POST /payments/:id/refund — refund a completed payment
-    router.post('/:id/refund', async (req, res, next) => {
+    router.post('/:id/refund', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const payment = await paymentService.refundPayment(storeId, req.params.id);
             res.json({
-                success: true,
+                status: 'success',
                 message: 'Payment refunded successfully',
                 data: { payment: formatPayment(payment) }
             });
@@ -203,16 +210,16 @@ function createPaymentRouter(paymentService) {
     });
 
     // POST /payments/vnpay/create-url — create VNPay payment URL
-    router.post('/vnpay/create-url', async (req, res, next) => {
+    router.post('/vnpay/create-url', verifyToken, async (req, res, next) => {
         try {
-            const storeId = req.user ? req.user.storeId : 1;
+            const storeId = req.user.storeId;
             const ipAddr = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-            const data = { ...req.body, created_by: req.user ? req.user.id : 1 };
+            const data = { ...req.body, created_by: req.user.id };
 
             const result = await paymentService.createVNPayUrl(storeId, data, ipAddr);
 
             res.status(201).json({
-                success: true,
+                status: 'success',
                 message: 'VNPay URL created',
                 data: result
             });
@@ -221,7 +228,7 @@ function createPaymentRouter(paymentService) {
         }
     });
 
-    // GET /payments/vnpay/ipn — VNPay IPN Webhook (Public Route)
+    // GET /payments/vnpay/ipn — VNPay IPN Webhook (Public Route — NO auth)
     router.get('/vnpay/ipn', async (req, res, next) => {
         try {
             const vnpayResponse = await paymentService.processVNPayIPN(req.query);

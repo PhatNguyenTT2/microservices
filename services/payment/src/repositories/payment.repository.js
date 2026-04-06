@@ -43,15 +43,17 @@ class PaymentRepository {
     }
 
     async create(storeId, data) {
-        const { amount, method, reference_type, reference_id, created_by, notes } = data;
+        const { amount, method, reference_type, reference_id, created_by, notes, items, deliveryType } = data;
         const query = `
             INSERT INTO payment 
-            (store_id, amount, method, status, reference_type, reference_id, created_by, notes)
-            VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7)
+            (store_id, amount, method, status, reference_type, reference_id, created_by, notes, items, delivery_type)
+            VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, $8, $9)
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [
-            storeId, amount, method, reference_type, reference_id, created_by, notes
+            storeId, amount, method, reference_type, reference_id, created_by, notes,
+            JSON.stringify(items || []),
+            deliveryType || 'pickup'
         ]);
         return rows[0];
     }

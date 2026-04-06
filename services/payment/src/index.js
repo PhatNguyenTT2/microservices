@@ -66,9 +66,9 @@ async function start() {
 
     logger.info({ intervalMs: SCAN_INTERVAL_MS, timeoutMinutes: TIMEOUT_MINUTES }, 'VNPay timeout scanner started');
 
-    // 8. Saga §5.3: Outbox poller — publishes events from outbox_events to RabbitMQ
+    // 8. Saga §5.3: Outbox poller — CRITICAL: pass SERVICE_NAME for shared-DB isolation
     const outbox = require('../../../shared/outbox');
-    const outboxPoller = outbox.startPoller(pool, eventBus, 3000);
+    const outboxPoller = outbox.startPoller(pool, eventBus, 3000, SERVICE_NAME);
 
     // Graceful shutdown
     const shutdown = async (signal) => {

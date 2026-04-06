@@ -1,5 +1,6 @@
 const { ValidationError, NotFoundError, AppError } = require('../../../../shared/common/errors');
 const outbox = require('../../../../shared/outbox');
+const EVENT = require('../../../../shared/event-bus/eventTypes');
 
 const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL || 'http://inventory:3006';
 const FEFO_TIMEOUT_MS = 2000;
@@ -126,13 +127,7 @@ class OrderService {
         discountPercentage: parseFloat(row.discount_percentage || 0),
         total: parseFloat(row.total_amount || 0),
         paymentStatus: row.payment_status,
-        status: row.status,
-        // Customer placeholder — will be enriched when Auth service integration is ready
-        customer: {
-          id: row.customer_id,
-          fullName: `Customer #${row.customer_id}`,
-          phone: ''
-        }
+        status: row.status
       };
     }
 
@@ -218,86 +213,15 @@ class OrderService {
       }
     }
 
-    /**
-     * Saga entry point: Create an online order (status = pending)
-     * Atomically saves order + publishes order.created via outbox
-     */
-    async createOnlineOrder(storeId, data, userId, jwtToken) {
-      const { customer_id, delivery_type, address, items: rawItems } = data;
-
-      if (!rawItems || rawItems.length === 0) throw new ValidationError('Order must contain items');
-
-      // FEFO allocation
-      const items = await this.allocateBatchesFEFO(storeId, rawItems, jwtToken);
-
-      const client = await this.pool.connect();
-      try {
-        await client.query('BEGIN');
-
-        let subtotal = 0;
-        const validItems = items.map(item => {
-          subtotal += item.total_price;
-          return { ...item, location_id: item.location_id };
-        });
-
-        const discount_percentage = data.discount_percentage || 0;
-        const shipping_fee = Number(data.shipping_fee || 0);
-        const total_amount = subtotal * (1 - discount_percentage / 100) + shipping_fee;
-
-        const orderData = {
-          customer_id,
-          created_by: userId,
-          delivery_type: delivery_type || 'delivery',
-          address,
-          shipping_fee,
-          discount_percentage,
-          total_amount
-        };
-
-        // 1. Create order with pending status
-        const header = await this.orderRepo.createOrderWithClient(client, storeId, orderData, 'pending');
-
-        // 2. Insert order details
-        for (const vItem of validItems) {
-          await this.detailRepo.addDetailWithClient(client, header.id, vItem);
-        }
-
-        // 3. Publish order.created via outbox (same transaction — atomic!)
-        const inventoryItems = validItems.map(item => ({
-          batchId: item.batch_id,
-          locationId: item.location_id,
-          quantity: item.quantity
-        }));
-
-        await outbox.insertEvent(client, 'order.created', {
-          orderId: header.id,
-          storeId,
-          customerId: customer_id,
-          totalAmount: total_amount,
-          items: inventoryItems
-        });
-
-        await client.query('COMMIT');
-
-        const details = await this.detailRepo.findByOrderId(header.id);
-        return {
-          ...this.formatOrder(header),
-          details: details.map(d => this.formatOrderDetail(d))
-        };
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw new AppError('Failed to create online order: ' + error.message, 500);
-      } finally {
-        client.release();
-      }
-    }
+    // NOTE: createOnlineOrder REMOVED — simplified flow uses createDraftOrder for ALL orders
+    // Online orders follow: draft → (payment.completed) → shipping → delivered
 
     async updateOrder(storeId, id, data) {
       const order = await this.orderRepo.findById(storeId, id);
       if (!order) throw new NotFoundError('Order not found');
 
-      // Cannot update delivered, cancelled, or refunded orders
-      if (['delivered', 'cancelled', 'refunded'].includes(order.status)) {
+      // Cannot update cancelled or refunded orders
+      if (['cancelled', 'refunded'].includes(order.status)) {
         throw new ValidationError(`Cannot update order with status '${order.status}'`);
       }
 
@@ -314,9 +238,27 @@ class OrderService {
       try {
         await client.query('BEGIN');
         const updated = await this.orderRepo.updateWithClient(client, storeId, id, dbData);
-        await client.query('COMMIT');
 
         if (!updated) throw new AppError('No fields to update', 400);
+
+        // Publish inventory events on status transitions (delivery orders)
+        const newStatus = dbData.status;
+        if (newStatus && order.delivery_type === 'delivery' && ['delivered', 'cancelled'].includes(newStatus)) {
+          const details = await this.detailRepo.findByOrderId(id);
+          const items = details.map(d => ({
+            batchId: d.batch_id,
+            locationId: null,
+            quantity: d.quantity
+          }));
+
+          if (newStatus === 'delivered' && order.status === 'shipping') {
+            await outbox.insertEvent(client, EVENT.ORDER_DELIVERED, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
+          } else if (newStatus === 'cancelled' && order.status === 'shipping') {
+            await outbox.insertEvent(client, EVENT.ORDER_CANCELLED, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
+          }
+        }
+
+        await client.query('COMMIT');
         return this.formatOrder(updated);
       } catch (error) {
         await client.query('ROLLBACK');
@@ -337,6 +279,27 @@ class OrderService {
               if (!order) throw new NotFoundError('Order not found');
               
               const updated = await this.orderRepo.updateStatusWithClient(client, storeId, id, status, paymentStatus);
+
+              // Publish inventory events on status transitions
+              if (status && order.delivery_type === 'delivery') {
+                const details = await this.detailRepo.findByOrderId(id);
+                const items = details.map(d => ({
+                  batchId: d.batch_id,
+                  locationId: null,
+                  quantity: d.quantity
+                }));
+
+                if (status === 'shipping' && order.status === 'draft') {
+                  // Phase 1: Payment completed for delivery → publish order.shipping
+                  await outbox.insertEvent(client, EVENT.ORDER_SHIPPING, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
+                } else if (status === 'delivered' && order.status === 'shipping') {
+                  // Phase 2: Delivery confirmed → publish order.delivered
+                  await outbox.insertEvent(client, EVENT.ORDER_DELIVERED, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
+                } else if (status === 'cancelled' && order.status === 'shipping') {
+                  // Cancellation of shipping order → publish order.cancelled
+                  await outbox.insertEvent(client, EVENT.ORDER_CANCELLED, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
+                }
+              }
               
               await client.query('COMMIT');
               return this.formatOrder(updated);
@@ -352,9 +315,9 @@ class OrderService {
       const order = await this.orderRepo.findById(storeId, id);
       if (!order) throw new NotFoundError('Order not found');
 
-      // Can only hard-delete draft/pending orders with pending payment
-      if (!['draft', 'pending'].includes(order.status) || order.payment_status !== 'pending') {
-        throw new ValidationError('Can only delete draft or pending orders with pending payment');
+      // Can only hard-delete draft orders with pending payment
+      if (order.status !== 'draft' || order.payment_status !== 'pending') {
+        throw new ValidationError('Can only delete draft orders with pending payment');
       }
 
       const client = await this.pool.connect();
@@ -386,12 +349,19 @@ class OrderService {
       }
     }
 
-    async refundOrder(storeId, id, data) {
+    /**
+     * Manual trigger: Mark order as fully refunded.
+     * Pre-condition: payment_status must be 'partial_refund' (all payments refunded via Payment service).
+     */
+    async refundOrder(storeId, id) {
       const order = await this.orderRepo.findById(storeId, id);
       if (!order) throw new NotFoundError('Order not found');
 
-      if (order.status !== 'delivered' || order.payment_status !== 'paid') {
-        throw new ValidationError('Can only refund delivered orders that are fully paid');
+      if (!['delivered', 'shipping'].includes(order.status)) {
+        throw new ValidationError('Can only refund delivered or shipping orders');
+      }
+      if (!['partial_refund', 'refunded'].includes(order.payment_status)) {
+        throw new ValidationError('No refund activity detected. Refund payments first.');
       }
 
       const client = await this.pool.connect();
@@ -400,6 +370,21 @@ class OrderService {
         const updated = await this.orderRepo.updateStatusWithClient(
           client, storeId, id, 'refunded', 'refunded'
         );
+
+        // Publish order.refunded → Inventory will return stock to on_hand
+        const details = await this.detailRepo.findByOrderId(id);
+        const items = details.map(d => ({
+          batchId: d.batch_id,
+          locationId: null,
+          quantity: d.quantity
+        }));
+        await outbox.insertEvent(client, EVENT.ORDER_REFUNDED, {
+          orderId: id,
+          storeId,
+          items,
+          deliveryType: order.delivery_type
+        }, 'order-service');
+
         await client.query('COMMIT');
 
         return {

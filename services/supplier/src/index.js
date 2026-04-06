@@ -44,12 +44,94 @@ async function start() {
       { inventoryServiceUrl: process.env.INVENTORY_SERVICE_URL || 'http://inventory:3006' }
     );
 
-    // 4. Create app (pool does not leak to routes)
+    // 4. Subscribe to payment events for PO payment_status sync
+    await eventBus.subscribe(SERVICE_NAME, 'payment.completed', async (message) => {
+      const { orderId, storeId, referenceType, amount, totalPaidSoFar } = message.data;
+      const eventId = message.id;
+
+      // Only handle PurchaseOrder
+      if (referenceType !== 'PurchaseOrder') return;
+
+      logger.info({ orderId, storeId, eventId, amount, totalPaidSoFar }, 'Received payment.completed for PO');
+
+      // Idempotency
+      try {
+        await pool.query('INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)', [eventId, 'payment.completed']);
+      } catch (dupErr) {
+        if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
+        throw dupErr;
+      }
+
+      try {
+        const po = await purchaseOrderRepo.findById(storeId, orderId);
+        if (!po) { logger.warn({ orderId, storeId }, 'PO not found'); return; }
+
+        const poTotal = parseFloat(po.total_price);
+        const newPaymentStatus = totalPaidSoFar >= poTotal ? 'paid' : 'partial';
+
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await purchaseOrderRepo.updateStatusWithClient(client, storeId, orderId, null, newPaymentStatus);
+          await client.query('COMMIT');
+          logger.info({ orderId, newPaymentStatus, totalPaidSoFar, poTotal }, 'PO payment_status updated');
+        } catch (e) {
+          await client.query('ROLLBACK');
+          throw e;
+        } finally {
+          client.release();
+        }
+      } catch (err) {
+        logger.error({ err: err.message, orderId }, 'Failed to process payment.completed for PO');
+      }
+    });
+
+    await eventBus.subscribe(SERVICE_NAME, 'payment.refunded', async (message) => {
+      const { orderId, storeId, referenceType, allRefunded } = message.data;
+      const eventId = message.id;
+
+      // Only handle PurchaseOrder
+      if (referenceType !== 'PurchaseOrder') return;
+
+      logger.info({ orderId, storeId, eventId, allRefunded }, 'Received payment.refunded for PO');
+
+      // Idempotency
+      try {
+        await pool.query('INSERT INTO processed_events (event_id, event_type) VALUES ($1, $2)', [eventId, 'payment.refunded']);
+      } catch (dupErr) {
+        if (dupErr.code === '23505') { logger.warn({ eventId }, 'Duplicate — skipping'); return; }
+        throw dupErr;
+      }
+
+      try {
+        const po = await purchaseOrderRepo.findById(storeId, orderId);
+        if (!po) { logger.warn({ orderId, storeId }, 'PO not found'); return; }
+
+        const newPaymentStatus = allRefunded ? 'refunded' : 'partial_refund';
+
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await purchaseOrderRepo.updateStatusWithClient(client, storeId, orderId, null, newPaymentStatus);
+          await client.query('COMMIT');
+          logger.info({ orderId, newPaymentStatus }, 'PO payment_status updated on refund');
+        } catch (e) {
+          await client.query('ROLLBACK');
+          throw e;
+        } finally {
+          client.release();
+        }
+      } catch (err) {
+        logger.error({ err: err.message, orderId }, 'Failed to process payment.refunded for PO');
+      }
+    });
+
+    // 5. Create app (pool does not leak to routes)
     const createApp = require('./app');
     const app = createApp({ supplierService, poService });
     app.locals.db = pool;
 
-    // 5. Start server
+    // 6. Start server
     const server = app.listen(PORT, () => {
       logger.info(`${SERVICE_NAME} running on port ${PORT}`);
     });

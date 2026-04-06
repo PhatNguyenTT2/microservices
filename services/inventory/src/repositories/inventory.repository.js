@@ -26,11 +26,18 @@ class InventoryRepository {
     // --- Inventory Items ---
     
     // Tìm bằng Client để Lock Row `FOR UPDATE` trong giao dịch xuất/nhập kho
+    // When locationId is null, find ANY inventory item for this batch (orders don't track location)
     async findItemForUpdateWithClient(client, batchId, locationId) {
-        const query = locationId
-            ? `SELECT * FROM inventory_item WHERE product_batch_id = $1 AND location_id = $2 FOR UPDATE`
-            : `SELECT * FROM inventory_item WHERE product_batch_id = $1 AND location_id IS NULL FOR UPDATE`;
-        const params = locationId ? [batchId, locationId] : [batchId];
+        let query;
+        let params;
+        if (locationId) {
+            query = `SELECT * FROM inventory_item WHERE product_batch_id = $1 AND location_id = $2 FOR UPDATE`;
+            params = [batchId, locationId];
+        } else {
+            // No location specified → find first item for this batch (prefer one with stock)
+            query = `SELECT * FROM inventory_item WHERE product_batch_id = $1 ORDER BY (quantity_on_shelf + quantity_on_hand) DESC FOR UPDATE`;
+            params = [batchId];
+        }
         const { rows } = await client.query(query, params);
         return rows[0] || null;
     }
