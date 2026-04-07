@@ -53,7 +53,7 @@
 | 5 | [Supplier](services/supplier/README.md) | 3005 | ✅ | ⚡ Sub | Nhà cung cấp + Đơn nhập hàng (Saga participant) |
 | 6 | [Inventory](services/inventory/README.md) | 3006 | ✅ | ⚡ Pub+Sub | Tồn kho, Kho bãi, Xuất kho (Saga core) |
 | 7 | [Payment](services/payment/README.md) | 3007 | ✅ | ⚡ Pub | Thanh toán Cash/VNPay (**Saga Orchestrator**) |
-| 8 | [Chatbot](services/chatbot/README.md) | 3008 | ✅ | — | AI Chatbot (Hugging Face) |
+| 8 | [Chatbot](services/chatbot/README.md) | 3008 | ✅ | ⚡ Sub | AI Chatbot RAG (Hybrid Search + RRF) |
 | 9 | [Statistics](services/statistics/README.md) | 3009 | ❌ | ⚡ Sub | Thống kê + Dashboard (Redis cache) |
 
 ## Saga Pattern (Event-Driven)
@@ -104,9 +104,10 @@
 | `order.delivered` | Order | Inventory |
 | `order.cancelled` | Order | Inventory |
 | `order.refunded` | Order | (internal state) |
-| `product.created` | Catalog | Chatbot RAG (planned) |
-| `product.updated` | Catalog | Chatbot RAG (planned) |
-| `product.deleted` | Catalog | Chatbot RAG (planned) |
+| `product.created` | Catalog | Chatbot RAG |
+| `product.updated` | Catalog | Chatbot RAG |
+| `product.deleted` | Catalog | Chatbot RAG |
+| `product.price_changed` | Catalog | Chatbot RAG |
 | `customer.created` | Auth | (planned for data replication) |
 | `customer.updated` | Auth | (planned for data replication) |
 
@@ -125,7 +126,7 @@
 | Singleton Config | Settings Service | Each config type has exactly 1 record (id=1) |
 | Event Payload Contract | Payment -> Inventory | `items[]` MUST have data; if empty, Inventory skips deduction silently |
 | Type Coercion | Frontend -> API | PostgreSQL returns numeric IDs as strings; frontend must `parseInt()` |
-| RAG Pipeline | Chatbot Service | Vector embedding + pgvector search + LLM generation |
+| RAG Pipeline | Chatbot Service | Hybrid Search (pgvector + tsvector) + RRF Fusion + LLM generation |
 
 ## Multi-Tenancy
 

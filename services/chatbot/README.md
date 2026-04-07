@@ -101,7 +101,7 @@ chatbot/src/
 Primary: **Event-Driven** via RabbitMQ (near real-time)
 Fallback: Cron job every 30 minutes (full-sync for missed events or service restarts)
 
-## RAG Pipeline (5-Layer Processing)
+## RAG Pipeline (7-Layer Processing)
 
 ### Layer 1: Intent Resolution
 ```
@@ -110,34 +110,45 @@ User message -> keyword matching -> classify intent
   "don hang #5 sao roi" -> intent: ORDER_STATUS -> HTTP API call
 ```
 
-### Layer 2: Query Embedding
+### Layer 2: Query Reformulation
+```
+Check for pronouns ("nó", "cái đó", "loại này")
+  If found + has chat history -> Phi-3 rewrites to standalone query
+  "Nó giá bao nhiêu?" -> "Bia Tiger 330ml giá bao nhiêu?"
+```
+
+### Layer 3: Query Embedding
 ```
 Vietnamese SBERT (local CPU, ONNX Runtime)
-  Input: user message text
+  Input: reformulated query text
   Output: 768-dimensional vector
 ```
 
-### Layer 3: Vector Search + Metadata Filtering
-```sql
-SELECT *, embedding <=> $query_vector AS distance
-FROM product_knowledge_base
-WHERE store_id = $store_id
-  AND is_in_stock = TRUE
-ORDER BY embedding <=> $query_vector
-LIMIT 5;
+### Layer 4: Hybrid Search (parallel)
+```
+Promise.all([
+  Semantic: pgvector cosine distance (store_id + is_in_stock filter),
+  Keyword:  tsvector full-text search (same filters)
+])
 ```
 
-### Layer 4: Co-purchase Enrichment
+### Layer 5: RRF Fusion
 ```
-Top-5 products from vector search
+Reciprocal Rank Fusion: score(d) = SUM(1 / (60 + rank))
+  Merge semantic + keyword results -> Top 5 by RRF score
+```
+
+### Layer 6: Co-purchase Enrichment
+```
+Top-5 products from RRF
   -> Query co_purchase_stats for each product
   -> Add "frequently bought together" products (count >= 3)
 ```
 
-### Layer 5: Personalized Generation
+### Layer 7: Personalized Generation
 ```
 Customer profile (from Auth Service: customer_type, total_spent)
-  + Product data (from vector search + co-purchase)
+  + Product data (from hybrid search + co-purchase)
   + System prompt (personalization rules per customer type)
   -> Phi-3-mini LLM (HuggingFace Inference API)
   -> Natural language response in Vietnamese
