@@ -4,16 +4,24 @@
  */
 
 const logger = require('../../../../shared/common/logger');
+const { generateToken } = require('../../../../shared/auth-middleware');
 
 const SERVICE_URLS = {
     catalog: process.env.CATALOG_SERVICE_URL || 'http://catalog:3002',
     inventory: process.env.INVENTORY_SERVICE_URL || 'http://inventory:3006',
-    order: process.env.ORDER_SERVICE_URL || 'http://order:3003'
+    order: process.env.ORDER_SERVICE_URL || 'http://order:3003',
+    auth: process.env.AUTH_SERVICE_URL || 'http://auth:3001'
 };
 
 class ApiClient {
     constructor(token = null) {
-        this.token = token;
+        // Use provided token or generate internal service token for S2S calls
+        this.token = token || generateToken({
+            id: 0,
+            username: 'chatbot-service',
+            role: 'Admin',
+            permissions: ['products.read', 'inventory.read', 'orders.read', 'customers.read']
+        }, '24h');
     }
 
     async _fetch(url, options = {}) {
@@ -50,10 +58,20 @@ class ApiClient {
         return this._fetch(url);
     }
 
+    async getAllProducts() {
+        const url = `${SERVICE_URLS.catalog}/api/products`;
+        return this._fetch(url);
+    }
+
     // ── Inventory Service ─────────────────────────
     async getInventorySummary(storeId, productId = null) {
         let url = `${SERVICE_URLS.inventory}/api/inventory/summary`;
         if (productId) url += `?productId=${productId}`;
+        return this._fetch(url);
+    }
+
+    async getStoreInventory(storeId) {
+        const url = `${SERVICE_URLS.inventory}/api/inventory/summary?storeId=${storeId}`;
         return this._fetch(url);
     }
 
@@ -68,6 +86,17 @@ class ApiClient {
         if (filters.status) params.set('status', filters.status);
         if (filters.paymentStatus) params.set('paymentStatus', filters.paymentStatus);
         const url = `${SERVICE_URLS.order}/api/orders?${params.toString()}`;
+        return this._fetch(url);
+    }
+
+    // ── Auth Service ──────────────────────────────
+    async getCustomerProfile(customerId) {
+        const url = `${SERVICE_URLS.auth}/api/customers/${customerId}`;
+        return this._fetch(url);
+    }
+
+    async getStores() {
+        const url = `${SERVICE_URLS.auth}/api/stores`;
         return this._fetch(url);
     }
 }

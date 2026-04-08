@@ -16,8 +16,13 @@ const INTENT_PATTERNS = {
         keywords: ['đơn hàng', 'order', 'tracking', 'giao hàng', 'trạng thái đơn', 'đơn #', 'mã đơn'],
         description: 'Kiểm tra trạng thái đơn hàng'
     },
+    RECOMMENDATION: {
+        keywords: ['gợi ý', 'recommend', 'đề xuất', 'tư vấn', 'nên mua', 'mua gì',
+                   'có gì ngon', 'giới thiệu', 'best seller', 'bán chạy', 'phổ biến'],
+        description: 'Gợi ý sản phẩm (RAG Pipeline)'
+    },
     SEARCH_PRODUCT: {
-        keywords: ['tìm', 'search', 'gợi ý', 'có gì', 'sản phẩm nào', 'recommend', 'loại nào'],
+        keywords: ['tìm', 'search', 'có gì', 'sản phẩm nào', 'loại nào', 'tìm kiếm'],
         description: 'Tìm kiếm sản phẩm'
     },
     HELP: {

@@ -1,15 +1,18 @@
 const { ValidationError, NotFoundError, AppError } = require('../../../../shared/common/errors');
+const EVENT = require('../../../../shared/event-bus/eventTypes');
+const logger = require('../../../../shared/common/logger');
 
 /**
  * Product Service
  * Xử lý logic cho Sản phẩm và cập nhật giá (Zone 1)
  */
 class ProductService {
-    constructor(productRepository, categoryRepository, priceHistoryRepository, dbPool) {
+    constructor(productRepository, categoryRepository, priceHistoryRepository, dbPool, eventBus = null) {
         this.productRepository = productRepository;
         this.categoryRepository = categoryRepository;
         this.priceHistoryRepository = priceHistoryRepository;
         this.pool = dbPool;
+        this.eventBus = eventBus;
     }
 
     /**
@@ -83,8 +86,21 @@ class ProductService {
         };
 
         const row = await this.productRepository.create(dbData);
-        // Re-fetch with JOIN to get category_name
-        return this.getProductById(row.id);
+        const product = await this.getProductById(row.id);
+
+        if (this.eventBus) {
+            try {
+                await this.eventBus.publish(EVENT.PRODUCT_CREATED, {
+                    productId: product.id, name: product.name,
+                    categoryId: product.categoryId, categoryName: product.categoryName,
+                    unitPrice: product.unitPrice, vendor: product.vendor
+                });
+            } catch (err) {
+                logger.error({ err, productId: product.id }, 'Failed to publish product.created event');
+            }
+        }
+
+        return product;
     }
 
     async updateProduct(id, data) {
@@ -109,7 +125,21 @@ class ProductService {
         };
 
         await this.productRepository.update(id, dbData);
-        return this.getProductById(id);
+        const product = await this.getProductById(id);
+
+        if (this.eventBus) {
+            try {
+                await this.eventBus.publish(EVENT.PRODUCT_UPDATED, {
+                    productId: product.id, name: product.name,
+                    categoryId: product.categoryId, categoryName: product.categoryName,
+                    unitPrice: product.unitPrice, vendor: product.vendor
+                });
+            } catch (err) {
+                logger.error({ err, productId: product.id }, 'Failed to publish product.updated event');
+            }
+        }
+
+        return product;
     }
 
     async updateStatus(id, isActive) {
@@ -119,8 +149,19 @@ class ProductService {
     }
 
     async deleteProduct(id) {
-        await this.getProductById(id);
+        const product = await this.getProductById(id);
         await this.productRepository.delete(id);
+
+        if (this.eventBus) {
+            try {
+                await this.eventBus.publish(EVENT.PRODUCT_DELETED, {
+                    productId: parseInt(id), name: product.name
+                });
+            } catch (err) {
+                logger.error({ err, productId: id }, 'Failed to publish product.deleted event');
+            }
+        }
+
         return { message: 'Product deleted successfully' };
     }
 
@@ -160,6 +201,18 @@ class ProductService {
             await this.priceHistoryRepository.createWithClient(client, logData);
 
             await client.query('COMMIT');
+
+            if (this.eventBus) {
+                try {
+                    await this.eventBus.publish(EVENT.PRODUCT_PRICE_CHANGED, {
+                        productId: parseInt(id),
+                        oldPrice: Number(rawProduct.unit_price),
+                        newPrice: Number(newPrice)
+                    });
+                } catch (err) {
+                    logger.error({ err, productId: id }, 'Failed to publish product.price_changed event');
+                }
+            }
 
             return this.getProductById(id);
         } catch (error) {

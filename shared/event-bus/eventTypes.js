@@ -24,6 +24,7 @@ module.exports = {
   INVENTORY_LOW_STOCK: 'inventory.low_stock',
 
   // Order Service (Producer)
+  ORDER_COMPLETED: 'order.completed',
   ORDER_SHIPPING: 'order.shipping',
   ORDER_DELIVERED: 'order.delivered',
   ORDER_CANCELLED: 'order.cancelled',

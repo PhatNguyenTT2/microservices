@@ -39,7 +39,7 @@ async function start() {
     const priceHistoryRepo = new PriceHistoryRepository(pool);
 
     const categoryService = new CategoryService(categoryRepo, productRepo);
-    const productService = new ProductService(productRepo, categoryRepo, priceHistoryRepo, pool);
+    const productService = new ProductService(productRepo, categoryRepo, priceHistoryRepo, pool, eventBus);
 
     // 4. Create app
     const createApp = require('./app');

@@ -87,6 +87,7 @@ function initChatSocket(io, chatService) {
                         session_id,
                         intent: result.intent,
                         reply: result.reply,
+                        products: result.products || null,
                         metadata: result.metadata,
                         timestamp: new Date().toISOString()
                     }

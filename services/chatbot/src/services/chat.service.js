@@ -3,10 +3,11 @@ const { resolveIntent } = require('./intent.resolver');
 const logger = require('../../../../shared/common/logger');
 
 class ChatService {
-    constructor(chatRepo, hfClient, apiClient = null) {
+    constructor(chatRepo, hfClient, apiClient = null, ragService = null) {
         this.chatRepo = chatRepo;
         this.hfClient = hfClient;
         this.apiClient = apiClient;
+        this.ragService = ragService;
     }
 
     async startSession(userId, userType, storeId = null) {
@@ -64,8 +65,11 @@ class ChatService {
             case 'ORDER_STATUS':
                 response = await this._handleOrderStatus(sessionId, userMessage);
                 break;
+            case 'RECOMMENDATION':
+                response = await this._handleRecommendation(session, userMessage);
+                break;
             case 'SEARCH_PRODUCT':
-                response = await this._handleSearchProduct(sessionId, userMessage);
+                response = await this._handleSearchProduct(session, userMessage);
                 break;
             case 'HELP':
                 response = this._handleHelp();
@@ -87,12 +91,36 @@ class ChatService {
         return {
             intent: intentResult.intent,
             reply: response.content,
+            products: response.products || null,
             metadata: {
                 model: response.model,
                 latencyMs: response.latencyMs,
                 intent: intentResult,
-                apiCalled: response.apiCalled || null
+                apiCalled: response.apiCalled || null,
+                ragMetadata: response.ragMetadata || null
             }
+        };
+    }
+
+    // ── RAG Intent Handlers ──────────────────────
+
+    async _handleRecommendation(session, userMessage) {
+        if (!this.ragService) {
+            return this._handleSearchProductFallback(session.id, userMessage);
+        }
+
+        const storeId = session.store_id || 1;
+        const customerId = session.user_type === 'customer' ? session.user_id : null;
+        const chatHistory = await this._getRecentHistory(session.id);
+
+        const result = await this.ragService.recommend(
+            userMessage, storeId, customerId, chatHistory
+        );
+
+        return {
+            content: result.content,
+            products: result.products,
+            ragMetadata: result.metadata
         };
     }
 
@@ -113,10 +141,12 @@ class ChatService {
         const stockResult = await this.apiClient.getInventorySummary(null, product.id);
 
         let stockInfo;
-        if (stockResult.success && stockResult.data?.summary?.length) {
-            const stock = stockResult.data.summary[0];
+        // Inventory API returns: { data: [{ productId, quantityOnHand, quantityOnShelf, ... }] }
+        const items = Array.isArray(stockResult.data) ? stockResult.data : [];
+        const stock = items.find(i => String(i.productId || i.id) === String(product.id));
+        if (stock) {
             stockInfo = `Sản phẩm "${product.name}" (ID: ${product.id}): ` +
-                `On-hand: ${stock.quantity_on_hand || 0}, On-shelf: ${stock.quantity_on_shelf || 0}`;
+                `On-hand: ${stock.quantityOnHand || 0}, On-shelf: ${stock.quantityOnShelf || 0}`;
         } else {
             stockInfo = `Sản phẩm "${product.name}" (ID: ${product.id}): Chưa có dữ liệu tồn kho.`;
         }
@@ -138,7 +168,7 @@ class ChatService {
 
         const products = searchResult.data.products.slice(0, 5);
         const priceList = products.map(p =>
-            `- ${p.name}: ${Number(p.selling_price || p.price || 0).toLocaleString('vi-VN')}đ`
+            `- ${p.name}: ${Number(p.unitPrice || 0).toLocaleString('vi-VN')}đ`
         ).join('\n');
 
         return this._enrichWithAI(sessionId, userMessage,
@@ -175,8 +205,31 @@ class ChatService {
         return this._enrichWithAI(sessionId, userMessage, `[DATA] Chưa có đơn hàng nào.`);
     }
 
-    async _handleSearchProduct(sessionId, userMessage) {
-        const keyword = this._extractKeyword(userMessage, ['tìm', 'search', 'gợi ý', 'có gì', 'sản phẩm nào']);
+    async _handleSearchProduct(session, userMessage) {
+        // Use RAG for semantic search if available
+        if (this.ragService) {
+            const storeId = (typeof session === 'object') ? (session.store_id || 1) : 1;
+            const customerId = (typeof session === 'object' && session.user_type === 'customer') ? session.user_id : null;
+            const sessionId = (typeof session === 'object') ? session.id : session;
+            const chatHistory = await this._getRecentHistory(sessionId);
+
+            const result = await this.ragService.recommend(
+                userMessage, storeId, customerId, chatHistory
+            );
+            return {
+                content: result.content,
+                products: result.products,
+                ragMetadata: result.metadata
+            };
+        }
+
+        // Fallback: HTTP search via Catalog
+        const sessionId = (typeof session === 'object') ? session.id : session;
+        return this._handleSearchProductFallback(sessionId, userMessage);
+    }
+
+    async _handleSearchProductFallback(sessionId, userMessage) {
+        const keyword = this._extractKeyword(userMessage, ['tìm', 'search', 'có gì', 'sản phẩm nào']);
 
         if (!this.apiClient) return this._fallbackNoApi('SEARCH_PRODUCT', keyword);
 
@@ -188,7 +241,7 @@ class ChatService {
 
         const products = result.data.products.slice(0, 8);
         const list = products.map(p =>
-            `- ${p.name} | ${Number(p.selling_price || p.price || 0).toLocaleString('vi-VN')}đ | ${p.is_active ? 'Đang bán' : 'Ngừng bán'}`
+            `- ${p.name} | ${Number(p.unitPrice || 0).toLocaleString('vi-VN')}đ | ${p.isActive !== false ? 'Đang bán' : 'Ngừng bán'}`
         ).join('\n');
 
         return this._enrichWithAI(sessionId, userMessage,
@@ -247,6 +300,7 @@ class ChatService {
 💰 **Kiểm tra giá** — Hỏi "Giá sản phẩm Y bao nhiêu?"
 📦 **Trạng thái đơn hàng** — Hỏi "Đơn hàng #123 đến đâu rồi?"
 🛒 **Tìm sản phẩm** — Hỏi "Tìm sản phẩm giống nước rửa tay"
+💡 **Gợi ý sản phẩm** — Hỏi "Tư vấn nên mua gì làm quà?"
 💬 **Trò chuyện** — Hỏi bất cứ điều gì khác!
 
 Bạn cần giúp gì?`;
@@ -262,6 +316,16 @@ Bạn cần giúp gì?`;
         ];
 
         return await this.hfClient.chatCompletion(messages);
+    }
+
+    async _getRecentHistory(sessionId) {
+        try {
+            const messages = await this.chatRepo.getRecentContext(sessionId, 6);
+            return messages.map(m => ({ role: m.role, content: m.content }));
+        } catch (err) {
+            logger.warn({ err, sessionId }, 'Failed to get chat history');
+            return [];
+        }
     }
 }
 
