@@ -65,6 +65,52 @@ class HFClient {
             };
         }
     }
+
+    /**
+     * Streaming chat completion — yields tokens one-by-one
+     * @param {Array} messages - chat messages
+     * @param {object} options - { maxTokens, temperature }
+     * @yields {string} individual tokens
+     * @returns {{ content: string, model: string, latencyMs: number }}
+     */
+    async *chatCompletionStream(messages, options = {}) {
+        const startTime = Date.now();
+
+        try {
+            const stream = this.client.chatCompletionStream({
+                model: this.model,
+                messages: [
+                    { role: 'system', content: SYSTEM_PROMPT },
+                    ...messages
+                ],
+                max_tokens: options.maxTokens || 512,
+                temperature: options.temperature || 0.7,
+            });
+
+            let fullContent = '';
+            for await (const chunk of stream) {
+                const token = chunk.choices?.[0]?.delta?.content;
+                if (token) {
+                    fullContent += token;
+                    yield token;
+                }
+            }
+
+            const latencyMs = Date.now() - startTime;
+            logger.info({ model: this.model, latencyMs, contentLength: fullContent.length }, 'HF stream completion done');
+
+            return {
+                content: fullContent,
+                model: this.model,
+                latencyMs
+            };
+        } catch (err) {
+            const latencyMs = Date.now() - startTime;
+            logger.error({ err, model: this.model, latencyMs }, 'HF stream error');
+
+            yield 'Xin lỗi, hiện tại tôi không thể xử lý yêu cầu này. Vui lòng thử lại sau.';
+        }
+    }
 }
 
 module.exports = HFClient;

@@ -258,6 +258,26 @@ class OrderService {
           }
         }
 
+        // Publish order.completed when manually transitioning to 'delivered'
+        if (newStatus === 'delivered') {
+          const details = await this.detailRepo.findByOrderId(id);
+          const completedItems = details.map(d => ({
+            productId: null,
+            productName: d.product_name,
+            batchId: d.batch_id,
+            quantity: d.quantity,
+            unitPrice: parseFloat(d.unit_price || 0)
+          }));
+
+          await outbox.insertEvent(client, EVENT.ORDER_COMPLETED, {
+            orderId: id,
+            storeId,
+            customerId: order.customer_id,
+            items: completedItems,
+            deliveryType: order.delivery_type
+          }, 'order-service');
+        }
+
         await client.query('COMMIT');
         return this.formatOrder(updated);
       } catch (error) {
@@ -280,7 +300,7 @@ class OrderService {
               
               const updated = await this.orderRepo.updateStatusWithClient(client, storeId, id, status, paymentStatus);
 
-              // Publish inventory events on status transitions
+              // Publish inventory events on status transitions (delivery orders)
               if (status && order.delivery_type === 'delivery') {
                 const details = await this.detailRepo.findByOrderId(id);
                 const items = details.map(d => ({
@@ -299,6 +319,27 @@ class OrderService {
                   // Cancellation of shipping order → publish order.cancelled
                   await outbox.insertEvent(client, EVENT.ORDER_CANCELLED, { orderId: id, storeId, items, deliveryType: order.delivery_type }, 'order-service');
                 }
+              }
+
+              // Publish order.completed for any order type (pickup or delivery) transitioning to 'delivered'
+              // This feeds the Chatbot co-purchase stats pipeline
+              if (status === 'delivered') {
+                const details = await this.detailRepo.findByOrderId(id);
+                const completedItems = details.map(d => ({
+                  productId: null,       // Will be resolved by chatbot via batch lookup
+                  productName: d.product_name,
+                  batchId: d.batch_id,
+                  quantity: d.quantity,
+                  unitPrice: parseFloat(d.unit_price || 0)
+                }));
+
+                await outbox.insertEvent(client, EVENT.ORDER_COMPLETED, {
+                  orderId: id,
+                  storeId,
+                  customerId: order.customer_id,
+                  items: completedItems,
+                  deliveryType: order.delivery_type
+                }, 'order-service');
               }
               
               await client.query('COMMIT');

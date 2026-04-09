@@ -1,6 +1,12 @@
 /**
- * WebSocket Chat Handler — Socket.IO event handlers
- * Reuses ChatService for business logic, adds real-time layer.
+ * WebSocket Chat Handler — Socket.IO event handlers (Streaming Edition)
+ * Protocol:
+ *   Client → chat:join_session { sessionId }
+ *   Server → chat:session_ready { sessionId, messages[], restored }
+ *   Client → chat:send_message { session_id, message }
+ *   Server → chat:stream_chunk { text }  (×N)
+ *   Server → chat:stream_complete { intent, products[], fullText }
+ *   Server → chat:error { message, code }
  */
 
 const jwt = require('jsonwebtoken');
@@ -37,25 +43,52 @@ function initChatSocket(io, chatService) {
 
         logger.info({ userId, socketId: socket.id }, 'WS client connected');
 
-        // Join user-specific room for targeted events
+        // Join user-specific room
         socket.join(`user:${userId}`);
 
-        // ── Event: Start new session ──
-        socket.on('chat:start_session', async (data, callback) => {
+        // ── Event: Join/Restore session (with expiration fallback) ──
+        socket.on('chat:join_session', async (data, callback) => {
             try {
-                const session = await chatService.startSession(userId, userType, storeId || null);
-                socket.join(`session:${session.id}`);
-                logger.info({ userId, sessionId: session.id }, 'WS session started');
+                const sessionId = data?.sessionId || null;
 
-                const response = { success: true, data: session };
+                if (sessionId) {
+                    // Try to restore existing session
+                    const session = await chatService.getSession(sessionId).catch(() => null);
+
+                    if (session && session.is_active) {
+                        const messages = await chatService.getSessionMessages(sessionId);
+                        socket.join(`session:${sessionId}`);
+                        logger.info({ userId, sessionId }, 'WS session restored');
+
+                        const response = { success: true, data: { sessionId, messages, restored: true } };
+                        if (typeof callback === 'function') callback(response);
+                        socket.emit('chat:session_ready', response.data);
+                        return;
+                    }
+
+                    // Session expired or purged — fallback to new
+                    logger.warn({ userId, sessionId }, 'Session expired or not found, creating new');
+                }
+
+                // Create new session
+                const newSession = await chatService.startSession(userId, userType, storeId || null);
+                socket.join(`session:${newSession.id}`);
+                logger.info({ userId, sessionId: newSession.id }, 'WS new session created');
+
+                const response = {
+                    success: true,
+                    data: { sessionId: newSession.id, messages: [], restored: false }
+                };
                 if (typeof callback === 'function') callback(response);
-                socket.emit('chat:session_started', response);
+                socket.emit('chat:session_ready', response.data);
+
             } catch (err) {
+                // Catch-all: NEVER let widget hang
                 _emitError(socket, callback, 'chat:error', err);
             }
         });
 
-        // ── Event: Send message (main real-time flow) ──
+        // ── Event: Send message (streaming response) ──
         socket.on('chat:send_message', async (data, callback) => {
             try {
                 const { session_id, message } = data || {};
@@ -67,43 +100,35 @@ function initChatSocket(io, chatService) {
                 socket.join(`session:${session_id}`);
 
                 // Emit typing indicator
-                socket.to(`session:${session_id}`).emit('chat:typing', {
-                    session_id,
-                    is_typing: true
-                });
+                socket.emit('chat:typing', { session_id, is_typing: true });
 
-                // Process message via ChatService (same as REST)
-                const result = await chatService.sendMessage(session_id, message);
+                // Stream response chunks
+                for await (const chunk of chatService.sendMessageStream(session_id, message)) {
+                    if (chunk.type === 'chunk') {
+                        socket.emit('chat:stream_chunk', { text: chunk.text });
+                    } else if (chunk.type === 'complete') {
+                        // Stop typing + send complete
+                        socket.emit('chat:typing', { session_id, is_typing: false });
 
-                // Stop typing
-                socket.to(`session:${session_id}`).emit('chat:typing', {
-                    session_id,
-                    is_typing: false
-                });
+                        const completeData = {
+                            session_id,
+                            intent: chunk.intent,
+                            fullText: chunk.fullText,
+                            products: chunk.products || null,
+                            metadata: chunk.metadata,
+                            timestamp: new Date().toISOString()
+                        };
 
-                const response = {
-                    success: true,
-                    data: {
-                        session_id,
-                        intent: result.intent,
-                        reply: result.reply,
-                        products: result.products || null,
-                        metadata: result.metadata,
-                        timestamp: new Date().toISOString()
+                        if (typeof callback === 'function') callback({ success: true, data: completeData });
+                        socket.emit('chat:stream_complete', completeData);
+
+                        logger.info({ userId, sessionId: session_id, intent: chunk.intent }, 'WS stream completed');
                     }
-                };
-
-                if (typeof callback === 'function') callback(response);
-                socket.emit('chat:message_received', response);
-
-                logger.info({ userId, sessionId: session_id, intent: result.intent }, 'WS message processed');
+                }
             } catch (err) {
                 // Stop typing on error
                 if (data?.session_id) {
-                    socket.to(`session:${data.session_id}`).emit('chat:typing', {
-                        session_id: data.session_id,
-                        is_typing: false
-                    });
+                    socket.emit('chat:typing', { session_id: data.session_id, is_typing: false });
                 }
                 _emitError(socket, callback, 'chat:error', err);
             }

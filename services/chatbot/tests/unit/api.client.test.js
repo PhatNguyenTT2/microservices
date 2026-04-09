@@ -111,8 +111,8 @@ describe('ApiClient Unit Tests', () => {
         });
     });
 
-    describe('no auth token', () => {
-        it('should work without token', async () => {
+    describe('no auth token (auto-generates S2S token)', () => {
+        it('should auto-generate internal service token when no token provided', async () => {
             const noAuthClient = new ApiClient();
             global.fetch.mockResolvedValue({
                 ok: true,
@@ -122,7 +122,83 @@ describe('ApiClient Unit Tests', () => {
             await noAuthClient.searchProducts('test');
 
             const headers = global.fetch.mock.calls[0][1].headers;
-            expect(headers.Authorization).toBeUndefined();
+            // ApiClient auto-generates JWT for S2S auth
+            expect(headers.Authorization).toMatch(/^Bearer .+/);
+        });
+    });
+
+    describe('getAllProducts (RAG)', () => {
+        it('should call Catalog GET /api/products without search param', async () => {
+            global.fetch.mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({
+                    status: 'success',
+                    data: { products: [{ id: 1 }, { id: 2 }] }
+                })
+            });
+
+            const result = await apiClient.getAllProducts();
+
+            expect(result.success).toBe(true);
+            expect(result.data.products).toHaveLength(2);
+        });
+    });
+
+    describe('getStoreInventory (RAG)', () => {
+        it('should include storeId in inventory request', async () => {
+            global.fetch.mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({
+                    status: 'success',
+                    data: [{ productId: 1, quantityOnShelf: 10 }]
+                })
+            });
+
+            const result = await apiClient.getStoreInventory(1);
+
+            expect(result.success).toBe(true);
+            expect(global.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('storeId=1'),
+                expect.any(Object)
+            );
+        });
+    });
+
+    describe('getCustomerProfile (RAG)', () => {
+        it('should call Auth GET /api/customers/:id', async () => {
+            global.fetch.mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({
+                    status: 'success',
+                    data: { customerType: 'vip', totalSpent: 5000000 }
+                })
+            });
+
+            const result = await apiClient.getCustomerProfile(100);
+
+            expect(result.success).toBe(true);
+            expect(result.data.customerType).toBe('vip');
+            expect(global.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('/api/customers/100'),
+                expect.any(Object)
+            );
+        });
+    });
+
+    describe('getStores (RAG)', () => {
+        it('should call Auth GET /api/stores', async () => {
+            global.fetch.mockResolvedValue({
+                ok: true,
+                json: () => Promise.resolve({
+                    status: 'success',
+                    data: { stores: [{ id: 1 }, { id: 2 }] }
+                })
+            });
+
+            const result = await apiClient.getStores();
+
+            expect(result.success).toBe(true);
+            expect(result.data.stores).toHaveLength(2);
         });
     });
 });

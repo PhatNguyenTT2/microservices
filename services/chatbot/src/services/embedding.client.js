@@ -7,7 +7,7 @@ const { pipeline } = require('@xenova/transformers');
 const logger = require('../../../../shared/common/logger');
 
 class EmbeddingClient {
-    constructor(modelName = 'keepitreal/vietnamese-sbert') {
+    constructor(modelName = 'Xenova/multilingual-e5-base') {
         this.modelName = modelName;
         this.extractor = null;
         this.isReady = false;

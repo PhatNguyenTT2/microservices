@@ -1,4 +1,7 @@
 const { ValidationError, NotFoundError, AppError } = require('../../../../shared/common/errors');
+const eventBus = require('../../../../shared/event-bus');
+const EVENT = require('../../../../shared/event-bus/eventTypes');
+const logger = require('../../../../shared/common/logger');
 
 /**
  * Inventory Service
@@ -10,6 +13,36 @@ class InventoryService {
         this.batchRepo = batchRepo;
         this.warehouseRepo = warehouseRepo;
         this.pool = dbPool;
+    }
+
+    /**
+     * Publish inventory.updated event for downstream consumers (e.g. Chatbot RAG).
+     * Fire-and-forget: errors are logged but never block the main flow.
+     */
+    async _publishInventoryUpdate(storeId, productId, reason) {
+        try {
+            // Fetch live summary for this product at this store
+            const { rows } = await this.pool.query(
+                `SELECT COALESCE(SUM(ii.quantity_on_hand), 0)::int AS quantity_on_hand,
+                        COALESCE(SUM(ii.quantity_on_shelf), 0)::int AS quantity_on_shelf
+                 FROM inventory_item ii
+                 JOIN product_batch pb ON ii.product_batch_id = pb.id
+                 WHERE pb.product_id = $1 AND pb.store_id = $2`,
+                [productId, storeId]
+            );
+            const summary = rows[0] || { quantity_on_hand: 0, quantity_on_shelf: 0 };
+
+            await eventBus.publish(EVENT.INVENTORY_UPDATED, {
+                storeId,
+                productId,
+                quantityOnHand: summary.quantity_on_hand,
+                quantityOnShelf: summary.quantity_on_shelf,
+                isInStock: summary.quantity_on_shelf > 0,
+                reason
+            });
+        } catch (err) {
+            logger.warn({ err, storeId, productId, reason }, 'Failed to publish inventory.updated (non-blocking)');
+        }
     }
 
     // --- Query Views ---
@@ -98,6 +131,10 @@ class InventoryService {
             });
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated (fire-and-forget)
+            this._publishInventoryUpdate(storeId, batch.product_id, reason);
+
             return { message: 'Stock received successfully' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -152,6 +189,10 @@ class InventoryService {
             });
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated (fire-and-forget)
+            this._publishInventoryUpdate(storeId, batch.product_id, 'moved_to_shelf');
+
             return { message: 'Stock moved to shelf' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -203,6 +244,10 @@ class InventoryService {
             });
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated (fire-and-forget)
+            this._publishInventoryUpdate(storeId, batch.product_id, reason);
+
             return { message: 'Stock deducted successfully' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -257,6 +302,10 @@ class InventoryService {
             });
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated (fire-and-forget)
+            this._publishInventoryUpdate(storeId, batch.product_id, reason);
+
             return { message: 'Stock adjusted successfully' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -312,6 +361,13 @@ class InventoryService {
             }
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated for each reserved product (fire-and-forget)
+            for (const { batchId } of items) {
+                const b = await this.batchRepo.findById(storeId, batchId).catch(() => null);
+                if (b) this._publishInventoryUpdate(storeId, b.product_id, reason);
+            }
+
             return { message: 'Stock reserved successfully' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -357,6 +413,13 @@ class InventoryService {
             }
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated for each released product (fire-and-forget)
+            for (const { batchId } of items) {
+                const b = await this.batchRepo.findById(storeId, batchId).catch(() => null);
+                if (b) this._publishInventoryUpdate(storeId, b.product_id, reason);
+            }
+
             return { message: 'Stock released successfully' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -402,6 +465,13 @@ class InventoryService {
             }
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated for each confirmed product (fire-and-forget)
+            for (const { batchId } of items) {
+                const b = await this.batchRepo.findById(storeId, batchId).catch(() => null);
+                if (b) this._publishInventoryUpdate(storeId, b.product_id, reason);
+            }
+
             return { message: 'Stock deduction confirmed' };
         } catch (error) {
             await client.query('ROLLBACK');
@@ -463,6 +533,13 @@ class InventoryService {
             }
 
             await client.query('COMMIT');
+
+            // Publish inventory.updated for each returned product (fire-and-forget)
+            for (const { batchId } of items) {
+                const b = await this.batchRepo.findById(storeId, batchId).catch(() => null);
+                if (b) this._publishInventoryUpdate(storeId, b.product_id, reason);
+            }
+
             return { message: 'Stock returned to warehouse (on_hand)' };
         } catch (error) {
             await client.query('ROLLBACK');

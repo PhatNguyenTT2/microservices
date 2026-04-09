@@ -250,6 +250,92 @@ describe('ChatService Unit Tests', () => {
         });
     });
 
+    describe('sendMessage — RECOMMENDATION (with RAG)', () => {
+        let chatServiceWithRag;
+        let mockRagService;
+
+        beforeEach(() => {
+            mockRagService = {
+                recommend: jest.fn().mockResolvedValue({
+                    content: 'Gợi ý: Bia Tiger 15.000đ',
+                    productIds: [42, 55],
+                    products: [
+                        { id: 42, name: 'Bia Tiger', unitPrice: 15000, rrfScore: 0.032 }
+                    ],
+                    metadata: { totalLatencyMs: 200 }
+                })
+            };
+            chatServiceWithRag = new ChatService(mockChatRepo, mockHFClient, mockApiClient, mockRagService);
+            mockChatRepo.findSessionById.mockResolvedValue({
+                id: 1, user_id: 10, user_type: 'customer', store_id: 1, is_active: true
+            });
+        });
+
+        it('should delegate to ragService.recommend for RECOMMENDATION intent', async () => {
+            const result = await chatServiceWithRag.sendMessage(1, 'Gợi ý bia ngon đi');
+
+            expect(result.intent).toBe('RECOMMENDATION');
+            expect(mockRagService.recommend).toHaveBeenCalledWith(
+                'Gợi ý bia ngon đi', 1, 10, expect.any(Array)
+            );
+            expect(result.reply).toContain('Bia Tiger');
+            expect(result.products).toBeDefined();
+        });
+
+        it('should fallback to search when ragService is null', async () => {
+            const noRagService = new ChatService(mockChatRepo, mockHFClient, mockApiClient, null);
+            mockApiClient.searchProducts.mockResolvedValue({
+                success: true, data: { products: [{ name: 'Test', unitPrice: 1000, isActive: true }] }
+            });
+
+            const result = await noRagService.sendMessage(1, 'Gợi ý sản phẩm cho tôi');
+
+            expect(result.intent).toBe('RECOMMENDATION');
+            // Should fallback to search
+            expect(mockApiClient.searchProducts).toHaveBeenCalled();
+        });
+    });
+
+    describe('sendMessage — SEARCH_PRODUCT (with RAG)', () => {
+        let chatServiceWithRag;
+        let mockRagService;
+
+        beforeEach(() => {
+            mockRagService = {
+                recommend: jest.fn().mockResolvedValue({
+                    content: 'Tìm thấy: Nước rửa tay Lifebuoy',
+                    productIds: [10],
+                    products: [{ id: 10, name: 'Lifebuoy', unitPrice: 35000 }],
+                    metadata: {}
+                })
+            };
+            chatServiceWithRag = new ChatService(mockChatRepo, mockHFClient, mockApiClient, mockRagService);
+            mockChatRepo.findSessionById.mockResolvedValue({
+                id: 1, user_id: 10, user_type: 'customer', store_id: 1, is_active: true
+            });
+        });
+
+        it('should use RAG pipeline when ragService available', async () => {
+            const result = await chatServiceWithRag.sendMessage(1, 'Tìm nước rửa tay');
+
+            expect(result.intent).toBe('SEARCH_PRODUCT');
+            expect(mockRagService.recommend).toHaveBeenCalled();
+            expect(result.products).toBeDefined();
+        });
+
+        it('should fallback to HTTP search when no RAG', async () => {
+            const noRag = new ChatService(mockChatRepo, mockHFClient, mockApiClient, null);
+            mockApiClient.searchProducts.mockResolvedValue({
+                success: true, data: { products: [{ name: 'Dettol', unitPrice: 42000, isActive: true }] }
+            });
+
+            const result = await noRag.sendMessage(1, 'Tìm nước rửa tay');
+
+            expect(result.intent).toBe('SEARCH_PRODUCT');
+            expect(mockApiClient.searchProducts).toHaveBeenCalled();
+        });
+    });
+
     describe('getSession / endSession', () => {
         it('should return session if found', async () => {
             mockChatRepo.findSessionById.mockResolvedValue({ id: 1 });

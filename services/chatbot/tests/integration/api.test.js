@@ -116,4 +116,29 @@ describe('Chat API Integration Tests', () => {
             expect(res.body.service).toBe('chatbot-service');
         });
     });
+
+    describe('GET /api/rag/stats', () => {
+        it('should return knowledge base stats when knowledgeRepo available', async () => {
+            const mockKnowledgeRepo = {
+                getStats: jest.fn().mockResolvedValue({
+                    total_entries: '150', in_stock_count: '120',
+                    out_of_stock_count: '30', oldest_sync: '2026-04-01', latest_sync: '2026-04-08'
+                })
+            };
+
+            const mockHFClient = {
+                chatCompletion: jest.fn().mockResolvedValue({ content: 'test', model: 'test', latencyMs: 10 })
+            };
+            const ragApp = createApp({
+                chatService: new ChatService(mockChatRepo, mockHFClient),
+                knowledgeRepo: mockKnowledgeRepo
+            });
+
+            const res = await supertest(ragApp).get('/api/rag/stats');
+
+            expect(res.status).toBe(200);
+            expect(res.body.success).toBe(true);
+            expect(res.body.data.total_entries).toBe('150');
+        });
+    });
 });

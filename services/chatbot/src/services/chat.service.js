@@ -327,6 +327,110 @@ Bạn cần giúp gì?`;
             return [];
         }
     }
+
+    // ── Streaming Interface (WebSocket) ─────────────
+
+    /**
+     * Stream a response — yields { type, data } objects.
+     * type = 'chunk' for text tokens, 'complete' for final metadata.
+     * @param {number} sessionId
+     * @param {string} userMessage
+     * @yields {{ type: 'chunk', text: string } | { type: 'complete', intent: string, products: array, fullText: string }}
+     */
+    async *sendMessageStream(sessionId, userMessage) {
+        if (!userMessage || userMessage.trim().length === 0) {
+            throw new ValidationError('Message cannot be empty');
+        }
+
+        const session = await this.chatRepo.findSessionById(sessionId);
+        if (!session) throw new NotFoundError('Chat session');
+        if (!session.is_active) throw new ValidationError('Chat session has ended');
+
+        const intentResult = resolveIntent(userMessage);
+        logger.info({ sessionId, intent: intentResult.intent }, 'Stream: Intent resolved');
+
+        await this.chatRepo.addMessage(sessionId, 'user', userMessage, intentResult.intent);
+
+        let fullText = '';
+        let products = null;
+        let metadata = {};
+
+        const needsRealStream = ['FREE_CHAT'].includes(intentResult.intent);
+
+        if (needsRealStream) {
+            // Real LLM streaming
+            const chatHistory = await this.chatRepo.getRecentContext(sessionId, 8);
+            const messages = [
+                ...chatHistory.map(m => ({ role: m.role, content: m.content })),
+                { role: 'user', content: userMessage }
+            ];
+
+            for await (const token of this.hfClient.chatCompletionStream(messages)) {
+                fullText += token;
+                yield { type: 'chunk', text: token };
+            }
+
+            metadata = { model: this.hfClient.model };
+        } else {
+            // Data intents — get full response then simulate stream
+            let response;
+            switch (intentResult.intent) {
+                case 'CHECK_STOCK':
+                    response = await this._handleCheckStock(sessionId, userMessage);
+                    break;
+                case 'CHECK_PRICE':
+                    response = await this._handleCheckPrice(sessionId, userMessage);
+                    break;
+                case 'ORDER_STATUS':
+                    response = await this._handleOrderStatus(sessionId, userMessage);
+                    break;
+                case 'RECOMMENDATION':
+                    response = await this._handleRecommendation(session, userMessage);
+                    break;
+                case 'SEARCH_PRODUCT':
+                    response = await this._handleSearchProduct(session, userMessage);
+                    break;
+                case 'HELP':
+                    response = this._handleHelp();
+                    break;
+                default:
+                    response = await this._handleFreeChat(sessionId, userMessage);
+                    break;
+            }
+
+            fullText = response.content;
+            products = response.products || null;
+            metadata = { model: response.model, ragMetadata: response.ragMetadata || null };
+
+            // Simulate streaming: yield 3-4 words at a time for smooth UX
+            const words = fullText.split(/(\s+)/);
+            let buffer = '';
+            for (let i = 0; i < words.length; i++) {
+                buffer += words[i];
+                if ((i + 1) % 6 === 0 || i === words.length - 1) {
+                    yield { type: 'chunk', text: buffer };
+                    buffer = '';
+                    // Small delay for visual effect (10ms)
+                    await new Promise(r => setTimeout(r, 10));
+                }
+            }
+        }
+
+        // Save assistant message to DB
+        await this.chatRepo.addMessage(sessionId, 'assistant', fullText, intentResult.intent, {
+            model: metadata.model || null,
+            intent: intentResult.intent,
+        });
+
+        // Final complete signal
+        yield {
+            type: 'complete',
+            intent: intentResult.intent,
+            products,
+            fullText,
+            metadata
+        };
+    }
 }
 
 module.exports = ChatService;
