@@ -40,4 +40,13 @@ CREATE TABLE IF NOT EXISTS product_price_history (
 
 CREATE INDEX IF NOT EXISTS idx_price_history_product_id ON product_price_history(product_id);
 
+-- ==========================================
+-- MIGRATION: Add is_perishable flag to category
+-- Replaces hard-coded 'fresh' string matching
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE category ADD COLUMN is_perishable BOOLEAN NOT NULL DEFAULT FALSE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
 -- No seed data — data is managed via API

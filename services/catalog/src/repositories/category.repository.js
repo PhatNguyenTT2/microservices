@@ -95,32 +95,33 @@ class CategoryRepository {
     }
 
     async create(data) {
-        const { parent_id, name, image_url, description, sort_order } = data;
+        const { parent_id, name, image_url, description, sort_order, is_perishable } = data;
         const query = `
-            INSERT INTO category (parent_id, name, image_url, description, sort_order)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO category (parent_id, name, image_url, description, sort_order, is_perishable)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [
-            parent_id || null, name, image_url || null, description || null, sort_order || 0
+            parent_id || null, name, image_url || null, description || null, sort_order || 0, is_perishable || false
         ]);
         return rows[0];
     }
 
     async update(id, data) {
-        const { parent_id, name, image_url, description, sort_order } = data;
+        const { parent_id, name, image_url, description, sort_order, is_perishable } = data;
         const query = `
             UPDATE category 
             SET parent_id = COALESCE($1, parent_id),
                 name = COALESCE($2, name),
                 image_url = COALESCE($3, image_url),
                 description = COALESCE($4, description),
-                sort_order = COALESCE($5, sort_order)
-            WHERE id = $6
+                sort_order = COALESCE($5, sort_order),
+                is_perishable = COALESCE($6, is_perishable)
+            WHERE id = $7
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [
-            parent_id, name, image_url, description, sort_order, id
+            parent_id, name, image_url, description, sort_order, is_perishable, id
         ]);
         return rows[0] || null;
     }
@@ -129,6 +130,19 @@ class CategoryRepository {
         const query = 'DELETE FROM category WHERE id = $1 RETURNING id';
         const { rows } = await this.pool.query(query, [id]);
         return rows[0] || null;
+    }
+
+    /**
+     * Get product IDs belonging to perishable categories
+     * Used by Inventory service for auto-promotion targeting
+     */
+    async findPerishableProductIds() {
+        const { rows } = await this.pool.query(`
+            SELECT p.id FROM product p
+            JOIN category c ON p.category_id = c.id
+            WHERE c.is_perishable = TRUE AND p.is_active = TRUE
+        `);
+        return rows.map(r => r.id);
     }
 }
 

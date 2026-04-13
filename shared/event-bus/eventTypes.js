@@ -44,6 +44,10 @@ module.exports = {
   SETTINGS_PROMOTION_UPDATED: 'settings.promotion_updated',
   SETTINGS_DISCOUNT_UPDATED: 'settings.discount_updated',
 
+  // Fresh Product Promotion (cross-service: Settings ↔ Inventory)
+  PROMOTION_RUN_REQUESTED: 'promotion.run_requested',
+  PROMOTION_APPLIED: 'promotion.applied',
+
   // Supplier Service
   PO_CREATED: 'purchaseorder.created',
   PO_APPROVED: 'purchaseorder.approved',

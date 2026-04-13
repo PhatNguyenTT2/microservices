@@ -194,7 +194,7 @@ services:
       - RABBITMQ_URL=${RABBITMQ_URL}
       - JWT_SECRET=${JWT_SECRET}
       - HF_ACCESS_TOKEN=${HF_ACCESS_TOKEN}
-      - HF_MODEL=${HF_MODEL:-microsoft/Phi-3-mini-4k-instruct}
+      - HF_MODEL=${HF_MODEL:-microsoft/Qwen/Qwen2.5-7B-Instruct}
       - CATALOG_SERVICE_URL=http://catalog:3002
       - INVENTORY_SERVICE_URL=http://inventory:3006
       - ORDER_SERVICE_URL=http://order:3003

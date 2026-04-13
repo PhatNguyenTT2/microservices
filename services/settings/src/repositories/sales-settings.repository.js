@@ -17,7 +17,9 @@ class SalesSettingsRepository {
 
     const allowedFields = [
       'auto_promotion_enabled', 'promotion_start_time', 'promotion_discount_percentage',
-      'discount_retail', 'discount_wholesale', 'discount_vip', 'updated_by'
+      'discount_retail', 'discount_wholesale', 'discount_vip',
+      'apply_to_expiring_today', 'apply_to_expiring_tomorrow',
+      'updated_by'
     ];
 
     for (const [key, value] of Object.entries(data)) {

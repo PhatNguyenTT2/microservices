@@ -8,12 +8,12 @@ router.get('/health', (req, res) => {
 router.get('/ready', async (req, res) => {
   try {
     const dbStatus = await checkHealth(req.app.locals.db);
-    res.json({ 
-      status: 'ready', 
+    res.json({
+      status: 'ready',
       service: 'chatbot-service',
-      dependencies: { 
+      dependencies: {
         postgres: dbStatus,
-        hf_model: process.env.HF_MODEL || 'microsoft/Phi-3-mini-4k-instruct' 
+        hf_model: process.env.HF_MODEL || 'Qwen/Qwen2.5-7B-Instruct'
       }
     });
   } catch (err) {

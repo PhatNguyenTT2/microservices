@@ -23,7 +23,8 @@ class CategoryService {
             image: row.image_url || null,
             description: row.description || '',
             productCount: row.product_count || 0,
-            sortOrder: row.sort_order || 0
+            sortOrder: row.sort_order || 0,
+            isPerishable: row.is_perishable || false
         };
     }
 
@@ -108,7 +109,8 @@ class CategoryService {
             name: data.name,
             image_url: data.image || data.image_url || null,
             description: data.description || null,
-            sort_order: data.sortOrder !== undefined ? data.sortOrder : (data.sort_order || 0)
+            sort_order: data.sortOrder !== undefined ? data.sortOrder : (data.sort_order || 0),
+            is_perishable: data.isPerishable !== undefined ? data.isPerishable : (data.is_perishable || false)
         };
         const row = await this.categoryRepository.create(dbData);
         return this.formatCategory({ ...row, product_count: 0 });
@@ -137,7 +139,8 @@ class CategoryService {
             name: data.name,
             image_url: data.image !== undefined ? data.image : data.image_url,
             description: data.description,
-            sort_order: data.sortOrder !== undefined ? data.sortOrder : data.sort_order
+            sort_order: data.sortOrder !== undefined ? data.sortOrder : data.sort_order,
+            is_perishable: data.isPerishable !== undefined ? data.isPerishable : data.is_perishable
         };
         await this.categoryRepository.update(id, dbData);
         return this.getCategoryById(id);
@@ -166,6 +169,13 @@ class CategoryService {
 
         await this.categoryRepository.delete(id);
         return { message: 'Category deleted successfully' };
+    }
+
+    /**
+     * Get product IDs from perishable categories (for auto-promotion)
+     */
+    async getPerishableProductIds() {
+        return this.categoryRepository.findPerishableProductIds();
     }
 }
 

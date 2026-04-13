@@ -207,3 +207,16 @@ DO $$ BEGIN
     ALTER TABLE processed_events ADD CONSTRAINT processed_events_event_service_unique UNIQUE (event_id, service_name);
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
+
+-- ==========================================
+-- MIGRATION: Add promotion_applied to product_batch
+-- Tracks source of discount: auto_fresh (scheduler), manual (employee), none
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE product_batch ADD COLUMN promotion_applied TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE product_batch ADD CONSTRAINT chk_promotion_applied
+        CHECK (promotion_applied IN ('none', 'auto_fresh', 'manual'));
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_batch_promotion ON product_batch(promotion_applied) WHERE promotion_applied != 'none';

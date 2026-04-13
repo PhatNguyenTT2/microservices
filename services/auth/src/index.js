@@ -18,6 +18,7 @@ const CustomerService = require('./services/customer.service');
 const EmployeeService = require('./services/employee.service');
 const RbacService = require('./services/rbac.service');
 const StoreService = require('./services/store.service');
+const PosAuthService = require('./services/posAuth.service');
 
 const PORT = process.env.PORT || 3001;
 const SERVICE_NAME = 'auth-service';
@@ -57,10 +58,11 @@ async function start() {
     const employeeService = new EmployeeService(employeeRepo, userRepo, authRepo, storeRepo, pool);
     const rbacService = new RbacService({ roleRepo });
     const storeService = new StoreService(storeRepo);
+    const posAuthService = new PosAuthService({ authRepo, employeeRepo, userRepo });
 
     // 4. Create app — pool does NOT leak to app/routes layer
     const createApp = require('./app');
-    const app = createApp({ authService, customerService, employeeService, rbacService, storeService });
+    const app = createApp({ authService, customerService, employeeService, rbacService, storeService, posAuthService });
     app.locals.db = pool;
 
     // 5. Start server

@@ -34,6 +34,19 @@ function createCategoryRouter(categoryService) {
         }
     });
 
+    // GET product IDs of perishable categories (for cross-service promotion)
+    router.get('/perishable-products', verifyToken, async (req, res, next) => {
+        try {
+            const productIds = await categoryService.getPerishableProductIds();
+            res.json({
+                success: true,
+                data: productIds
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
     // GET category by ID
     router.get('/:id', verifyToken, async (req, res, next) => {
         try {

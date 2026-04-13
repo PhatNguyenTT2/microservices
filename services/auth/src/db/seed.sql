@@ -1,6 +1,6 @@
 -- ============================================================
--- SEED DATA: Permissions + Super Admin role
--- Run after init.sql
+-- SEED DATA: Permissions + Roles + Role-Permission assignments
+-- Run after init.sql (idempotent — uses ON CONFLICT)
 -- ============================================================
 
 -- 1. Insert all system permissions
@@ -18,15 +18,20 @@ INSERT INTO permission (code, description) VALUES
   ('view_reports', 'View Reports'),
   ('manage_payments', 'Manage Payments'),
   ('manage_settings', 'Manage Settings'),
-  ('view_notifications', 'View Notifications')
+  ('view_notifications', 'View Notifications'),
+  ('pos_access', 'POS Access - Can use POS terminal with PIN')
 ON CONFLICT (code) DO NOTHING;
 
--- 2. Create Super Admin role
+-- 2. Create 5 system roles
 INSERT INTO role (name, description) VALUES
-  ('Super Admin', 'Full system access - all permissions')
+  ('Super Admin', 'Full system access - all permissions'),
+  ('Store Manager', 'Store-level management - products, orders, inventory, customers, suppliers'),
+  ('Cashier', 'POS operations - process sales and payments'),
+  ('Store Admin', 'Store administration - manage employees, roles, and system settings'),
+  ('Customer', 'Customer self-service - view only')
 ON CONFLICT (name) DO NOTHING;
 
--- 3. Assign ALL permissions to Super Admin
+-- 3. Super Admin → ALL permissions
 INSERT INTO role_permission (role_id, permission_id)
 SELECT r.id, p.id
 FROM role r
@@ -34,10 +39,49 @@ CROSS JOIN permission p
 WHERE r.name = 'Super Admin'
 ON CONFLICT DO NOTHING;
 
--- 4. Create default roles (optional, for reference)
-INSERT INTO role (name, description) VALUES
-  ('Store Manager', 'Store-level management'),
-  ('Cashier', 'POS operations only'),
-  ('Inventory Staff', 'Inventory management'),
-  ('Customer', 'Customer self-service')
-ON CONFLICT (name) DO NOTHING;
+-- 4. Store Manager → store management + POS access
+INSERT INTO role_permission (role_id, permission_id)
+SELECT r.id, p.id
+FROM role r
+CROSS JOIN permission p
+WHERE r.name = 'Store Manager'
+  AND p.code IN (
+    'view_dashboard', 'manage_products', 'manage_categories',
+    'manage_orders', 'manage_customers', 'manage_suppliers',
+    'manage_inventory', 'view_reports', 'manage_payments',
+    'view_notifications', 'pos_access', 'manage_settings'
+  )
+ON CONFLICT DO NOTHING;
+
+-- 5. Cashier → POS operations only
+INSERT INTO role_permission (role_id, permission_id)
+SELECT r.id, p.id
+FROM role r
+CROSS JOIN permission p
+WHERE r.name = 'Cashier'
+  AND p.code IN (
+    'view_dashboard', 'manage_orders', 'manage_payments',
+    'view_notifications', 'pos_access'
+  )
+ON CONFLICT DO NOTHING;
+
+-- 6. Store Admin → admin management (no POS access)
+INSERT INTO role_permission (role_id, permission_id)
+SELECT r.id, p.id
+FROM role r
+CROSS JOIN permission p
+WHERE r.name = 'Store Admin'
+  AND p.code IN (
+    'view_dashboard', 'manage_employees', 'manage_roles',
+    'manage_settings', 'view_reports', 'view_notifications'
+  )
+ON CONFLICT DO NOTHING;
+
+-- 7. Customer → view only
+INSERT INTO role_permission (role_id, permission_id)
+SELECT r.id, p.id
+FROM role r
+CROSS JOIN permission p
+WHERE r.name = 'Customer'
+  AND p.code IN ('view_dashboard')
+ON CONFLICT DO NOTHING;

@@ -1,6 +1,6 @@
 /**
  * QueryReformulator — Rewrite ambiguous follow-up questions
- * Detects pronouns ("nó", "cái đó", "loại này") and uses Phi-3
+ * Detects pronouns ("nó", "cái đó", "loại này") and uses Qwen/Qwen2.5-7B-Instruct
  * to rewrite them into standalone queries using chat history
  */
 const logger = require('../../../../shared/common/logger');

@@ -10,7 +10,7 @@ const { verifyToken } = require('../../../shared/auth-middleware');
  * Create Express app with dependency injection.
  * @param {object} deps - { authService, customerService, employeeService, rbacService, storeService }
  */
-function createApp({ authService, customerService, employeeService, rbacService, storeService }) {
+function createApp({ authService, customerService, employeeService, rbacService, storeService, posAuthService }) {
   const app = express();
 
   app.use(helmet());
@@ -26,6 +26,7 @@ function createApp({ authService, customerService, employeeService, rbacService,
   app.use('/api/employees', require('./routes/employee.routes')(employeeService));
   app.use('/api/stores', verifyToken, require('./routes/store.routes')(storeService));
   app.use('/api', require('./routes/rbac.routes')(rbacService));
+  app.use('/api/pos-auth', require('./routes/posAuth.routes')(posAuthService));
 
   // Error handler (must be last)
   app.use(errorHandler);

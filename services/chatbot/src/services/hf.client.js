@@ -15,7 +15,7 @@ Nếu không có dữ liệu, trả lời dựa trên kiến thức chung.`;
 class HFClient {
     constructor(accessToken, model) {
         this.client = new InferenceClient(accessToken);
-        this.model = model || 'microsoft/Phi-3-mini-4k-instruct';
+        this.model = model || 'Qwen/Qwen2.5-7B-Instruct';
         logger.info({ model: this.model }, 'HF Inference Client initialized');
     }
 

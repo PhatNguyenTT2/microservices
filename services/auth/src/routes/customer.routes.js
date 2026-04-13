@@ -13,6 +13,13 @@ module.exports = function customerRoutes(customerService) {
       });
     } catch (err) { next(err); }
   });
+  // GET /api/customers/default-guest — for POS walk-in customer
+  router.get('/default-guest', verifyToken, async (req, res, next) => {
+    try {
+      const customer = await customerService.getDefaultGuest();
+      res.json({ success: true, data: { customer } });
+    } catch (err) { next(err); }
+  });
 
   // GET /api/customers/:id
   router.get('/:id', verifyToken, async (req, res, next) => {

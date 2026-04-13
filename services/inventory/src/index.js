@@ -302,6 +302,41 @@ async function start() {
     const app = createApp({ inventoryService, stockOutService, warehouseService, batchRepo, inventoryRepo, catalogServiceUrl });
     app.locals.db = pool;
 
+    // 6. Promotion engine (cross-service: Settings ↔ Inventory)
+    const PromotionService = require('./services/promotion.service');
+    const PromotionScheduler = require('./services/promotionScheduler');
+
+    const settingsServiceUrl = process.env.SETTINGS_SERVICE_URL || 'http://settings:3004';
+    const promotionService = new PromotionService({ pool, catalogBaseUrl: catalogServiceUrl });
+    const promotionScheduler = new PromotionScheduler({ promotionService, settingsBaseUrl: settingsServiceUrl });
+
+    // Subscribe: manual trigger from Settings
+    await eventBus.subscribe(SERVICE_NAME, EVENT.PROMOTION_RUN_REQUESTED, async (message) => {
+      const { requestId, config } = message.data;
+      logger.info({ requestId }, 'Received promotion.run_requested');
+      try {
+        const result = await promotionScheduler.runNow(config);
+        await eventBus.publish(EVENT.PROMOTION_APPLIED, { requestId, ...result });
+        logger.info({ requestId, applied: result.applied, removed: result.removed }, 'Promotion applied, result published');
+      } catch (err) {
+        logger.error({ err, requestId }, 'Failed to run promotion');
+        await eventBus.publish(EVENT.PROMOTION_APPLIED, {
+          requestId, success: false, message: err.message, applied: 0, removed: 0
+        });
+      }
+    });
+
+    // Subscribe: Settings config changed → restart scheduler
+    await eventBus.subscribe(SERVICE_NAME, EVENT.SETTINGS_PROMOTION_UPDATED, async (message) => {
+      logger.info('Received settings.promotion_updated — restarting scheduler');
+      await promotionScheduler.handleConfigUpdate(message.data);
+    });
+
+    // Initialize scheduler (will fetch config from Settings)
+    promotionScheduler.init().catch(err => {
+      logger.warn({ err }, 'Promotion scheduler init failed (will retry on next config update)');
+    });
+
     // 7. Start server
     const server = app.listen(PORT, () => {
       logger.info(`${SERVICE_NAME} running on port ${PORT}`);

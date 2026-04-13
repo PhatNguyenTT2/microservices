@@ -20,6 +20,7 @@ class ApiClient {
             id: 0,
             username: 'chatbot-service',
             role: 'Admin',
+            storeId: 1,
             permissions: ['products.read', 'inventory.read', 'orders.read', 'customers.read']
         }, '24h');
     }
@@ -65,8 +66,11 @@ class ApiClient {
 
     // ── Inventory Service ─────────────────────────
     async getInventorySummary(storeId, productId = null) {
-        let url = `${SERVICE_URLS.inventory}/api/inventory/summary`;
-        if (productId) url += `?productId=${productId}`;
+        const params = new URLSearchParams();
+        if (storeId) params.set('storeId', storeId);
+        if (productId) params.set('productId', productId);
+        const qs = params.toString();
+        const url = `${SERVICE_URLS.inventory}/api/inventory/summary${qs ? '?' + qs : ''}`;
         return this._fetch(url);
     }
 
@@ -81,10 +85,16 @@ class ApiClient {
         return this._fetch(url);
     }
 
+    async getOrderDetails(orderId) {
+        const url = `${SERVICE_URLS.order}/api/order-details?order=${orderId}`;
+        return this._fetch(url);
+    }
+
     async getOrders(filters = {}) {
         const params = new URLSearchParams();
         if (filters.status) params.set('status', filters.status);
         if (filters.paymentStatus) params.set('paymentStatus', filters.paymentStatus);
+        if (filters.customerId) params.set('customer', filters.customerId);
         const url = `${SERVICE_URLS.order}/api/orders?${params.toString()}`;
         return this._fetch(url);
     }

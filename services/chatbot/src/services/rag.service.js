@@ -6,9 +6,10 @@
  * Step 4: RRF Fusion → Top 5
  * Step 5: Co-purchase Enrichment
  * Step 6: Personalization
- * Step 7: Augmented Generation (Phi-3)
+ * Step 7: Augmented Generation (Qwen/Qwen2.5-7B-Instruct)
  */
 const logger = require('../../../../shared/common/logger');
+const { getPersonalizationContext, getCoPurchaseContext } = require('./context.helper');
 
 class RAGService {
     constructor({ knowledgeRepo, copurchaseRepo, embeddingClient, hfClient, apiClient, reformulator }) {
@@ -75,12 +76,12 @@ class RAGService {
 
             // Step 5: Co-purchase Enrichment
             const stepStart5 = Date.now();
-            const coPurchaseData = await this._getCoPurchaseContext(top5, storeId);
+            const coPurchaseData = await getCoPurchaseContext(this.copurchaseRepo, top5, storeId);
             metadata.steps.coPurchase = { latencyMs: Date.now() - stepStart5 };
 
             // Step 6: Personalization
             const stepStart6 = Date.now();
-            const customerContext = await this._getPersonalizationContext(customerId);
+            const customerContext = await getPersonalizationContext(this.apiClient, customerId);
             metadata.steps.personalization = {
                 customerType: customerContext.type,
                 latencyMs: Date.now() - stepStart6
@@ -150,67 +151,10 @@ class RAGService {
             .map(v => ({ ...v.item, rrf_score: v.score }));
     }
 
-    /**
-     * Get co-purchase suggestions for top products
-     */
-    async _getCoPurchaseContext(topProducts, storeId) {
-        if (!this.copurchaseRepo) return [];
 
-        try {
-            const allRelated = [];
-            for (const product of topProducts.slice(0, 3)) {
-                const related = await this.copurchaseRepo.getRelatedProducts(
-                    product.product_id, storeId, 3
-                );
-                if (related.length > 0) {
-                    allRelated.push({
-                        productId: product.product_id,
-                        productName: product.content.match(/"([^"]+)"/)?.[1] || `Product ${product.product_id}`,
-                        relatedProducts: related
-                    });
-                }
-            }
-            return allRelated;
-        } catch (err) {
-            logger.warn({ err }, 'Co-purchase lookup failed — skipping');
-            return [];
-        }
-    }
 
     /**
-     * Get customer profile for personalization
-     */
-    async _getPersonalizationContext(customerId) {
-        if (!customerId) return { type: 'retail', prompt: '' };
-
-        try {
-            const result = await this.apiClient.getCustomerProfile(customerId);
-            // Auth GET /api/customers/:id returns: { success, data: { customerType, totalSpent, ... } }
-            // ApiClient._fetch extracts: { success, data: { customerType, totalSpent, ... } }
-            if (!result?.success || !result.data) return { type: 'retail', prompt: '' };
-
-            const customer = result.data;
-            const type = customer.customerType || 'retail';
-
-            const prompts = {
-                vip: 'Khách VIP — ưu tiên sản phẩm premium, thông báo chương trình giảm giá đặc biệt.',
-                wholesale: 'Khách sỉ — gợi ý số lượng lớn, giá sỉ, đơn vị thùng/lốc.',
-                retail: 'Khách lẻ — gợi ý sản phẩm giá tốt, deal đang có, sản phẩm phổ thông.'
-            };
-
-            return {
-                type,
-                prompt: prompts[type] || prompts.retail,
-                totalSpent: customer.totalSpent || 0
-            };
-        } catch (err) {
-            logger.warn({ err, customerId }, 'Customer profile fetch failed — using default');
-            return { type: 'retail', prompt: '' };
-        }
-    }
-
-    /**
-     * Generate natural language response using Phi-3
+     * Generate natural language response using Qwen/Qwen2.5-7B-Instruct
      */
     async _generateResponse(originalMessage, reformulatedQuery, products, coPurchaseData, customerContext) {
         const productContext = products.map((p, i) => {

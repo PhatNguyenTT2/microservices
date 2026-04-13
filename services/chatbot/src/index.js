@@ -50,7 +50,7 @@ async function start() {
     if (!hfAccessToken) {
       logger.warn('HF_ACCESS_TOKEN not set — AI features will return fallback responses');
     }
-    const hfModel = process.env.HF_MODEL || 'microsoft/Phi-3-mini-4k-instruct';
+    const hfModel = process.env.HF_MODEL || 'Qwen/Qwen2.5-7B-Instruct';
     const hfClient = new HFClient(hfAccessToken, hfModel);
 
     // 4. Internal API Client (service-to-service)
@@ -88,7 +88,7 @@ async function start() {
       logger.warn('RAG Service DISABLED — embedding model not loaded');
     }
 
-    const chatService = new ChatService(chatRepo, hfClient, apiClient, ragService);
+    const chatService = new ChatService(chatRepo, hfClient, apiClient, ragService, copurchaseRepo);
 
     // 7. Subscribe to events (for RAG data ingestion)
     if (embeddingClient.isReady) {

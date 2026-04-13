@@ -31,6 +31,20 @@ class UnauthorizedError extends AppError {
   }
 }
 
+class PinInvalidError extends AppError {
+  constructor(attemptsRemaining) {
+    super('Invalid PIN', 401, 'INVALID_PIN');
+    this.attemptsRemaining = attemptsRemaining;
+  }
+}
+
+class PinLockedError extends AppError {
+  constructor(minutesLeft) {
+    super(`Account locked for ${minutesLeft} minutes`, 423, 'PIN_LOCKED');
+    this.minutesLeft = minutesLeft;
+  }
+}
+
 class ForbiddenError extends AppError {
   constructor(message = 'Forbidden') {
     super(message, 403, 'FORBIDDEN');
@@ -57,7 +71,9 @@ function errorHandler(err, req, res, _next) {
       error: {
         message: err.message,
         code: err.code,
-        ...(err.details && { details: err.details })
+        ...(err.details && { details: err.details }),
+        ...(err.attemptsRemaining !== undefined && { attemptsRemaining: err.attemptsRemaining }),
+        ...(err.minutesLeft !== undefined && { minutesLeft: err.minutesLeft })
       }
     });
   }
@@ -78,6 +94,8 @@ module.exports = {
   NotFoundError,
   ValidationError,
   UnauthorizedError,
+  PinInvalidError,
+  PinLockedError,
   ForbiddenError,
   ConflictError,
   errorHandler

@@ -43,6 +43,23 @@ function createApp({ settingsService }) {
     });
   });
 
+  // Internal service-to-service: Sales settings for promotion scheduler (no auth)
+  // Only accessible within Docker network — gateway does NOT expose /api/internal/*
+  app.get('/api/internal/sales-config', async (req, res, next) => {
+    try {
+      const data = await settingsService.getSalesSettings();
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  });
+
+  // Internal service-to-service: Security settings for POS auth (no auth)
+  app.get('/api/internal/security-config', async (req, res, next) => {
+    try {
+      const data = await settingsService.getSecuritySettings();
+      res.json({ success: true, data });
+    } catch (err) { next(err); }
+  });
+
   app.use(errorHandler);
 
   return app;

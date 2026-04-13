@@ -9,7 +9,7 @@ class ProductRepository {
 
     async findAll(filters = {}) {
         let query = `
-            SELECT p.*, c.name as category_name 
+            SELECT p.*, c.name as category_name, c.is_perishable 
             FROM product p
             LEFT JOIN category c ON p.category_id = c.id
             WHERE 1=1
@@ -101,7 +101,7 @@ class ProductRepository {
         params.push(offset);
 
         const dataQuery = `
-            SELECT p.*, c.name as category_name
+            SELECT p.*, c.name as category_name, c.is_perishable
             FROM product p
             LEFT JOIN category c ON p.category_id = c.id
             ${baseWhere}${orderBy}
@@ -120,7 +120,7 @@ class ProductRepository {
 
     async findById(id) {
         const query = `
-            SELECT p.*, c.name as category_name 
+            SELECT p.*, c.name as category_name, c.is_perishable 
             FROM product p
             LEFT JOIN category c ON p.category_id = c.id
             WHERE p.id = $1

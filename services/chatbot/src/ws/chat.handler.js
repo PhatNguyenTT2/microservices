@@ -38,8 +38,8 @@ function initChatSocket(io, chatService) {
     });
 
     io.on('connection', (socket) => {
-        const { id: userId, role, storeId } = socket.user;
-        const userType = role === 'Customer' ? 'customer' : 'employee';
+        const { id: userId, role, roleName, storeId } = socket.user;
+        const userType = (roleName === 'Customer' || role === 'Customer') ? 'customer' : 'employee';
 
         logger.info({ userId, socketId: socket.id }, 'WS client connected');
 
@@ -115,6 +115,7 @@ function initChatSocket(io, chatService) {
                             intent: chunk.intent,
                             fullText: chunk.fullText,
                             products: chunk.products || null,
+                            suggestedPrompts: chunk.suggestedPrompts || null,
                             metadata: chunk.metadata,
                             timestamp: new Date().toISOString()
                         };

@@ -48,3 +48,16 @@ CREATE TABLE IF NOT EXISTS settings_history (
 
 CREATE INDEX IF NOT EXISTS idx_settings_history_type ON settings_history(setting_type);
 CREATE INDEX IF NOT EXISTS idx_settings_history_date ON settings_history(changed_at);
+
+-- ==========================================
+-- MIGRATION: Add expiry targeting columns to sales_settings
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE sales_settings ADD COLUMN apply_to_expiring_today BOOLEAN NOT NULL DEFAULT TRUE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE sales_settings ADD COLUMN apply_to_expiring_tomorrow BOOLEAN NOT NULL DEFAULT FALSE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;

@@ -69,14 +69,14 @@ class AuthRepository {
     return rows[0];
   }
 
-  async incrementPosFailedAttempts(userId) {
+  async incrementPosFailedAttempts(userId, maxAttempts = 5, lockMinutes = 30) {
     const { rows } = await this.pool.query(
       `UPDATE pos_auth SET
         failed_attempts = failed_attempts + 1,
-        locked_until = CASE WHEN failed_attempts >= 4 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
+        locked_until = CASE WHEN failed_attempts + 1 >= $2 THEN NOW() + ($3 || ' minutes')::INTERVAL ELSE locked_until END
        WHERE user_id = $1
        RETURNING *`,
-      [userId]
+      [userId, maxAttempts, lockMinutes]
     );
     return rows[0] || null;
   }
@@ -86,6 +86,86 @@ class AuthRepository {
       `UPDATE pos_auth SET failed_attempts = 0, locked_until = NULL, last_login = NOW() WHERE user_id = $1`,
       [userId]
     );
+  }
+
+  async findAllPosAuth() {
+    const { rows } = await this.pool.query(
+      `SELECT
+         pa.user_id, pa.pin_hash, pa.failed_attempts, pa.locked_until, pa.is_enabled, pa.last_login as pos_last_login,
+         u.username, u.email, u.is_active, u.role_id,
+         r.name as role_name,
+         e.full_name, e.phone, e.store_id,
+         s.name as store_name
+       FROM pos_auth pa
+       JOIN user_account u ON pa.user_id = u.id
+       JOIN employee e ON u.id = e.user_id
+       JOIN role r ON u.role_id = r.id
+       LEFT JOIN store s ON e.store_id = s.id
+       ORDER BY e.full_name ASC`
+    );
+    return rows;
+  }
+
+  async findPosAuthWithDetails(userId) {
+    const { rows } = await this.pool.query(
+      `SELECT
+         pa.user_id, pa.pin_hash, pa.failed_attempts, pa.locked_until, pa.is_enabled, pa.last_login as pos_last_login,
+         u.username, u.email, u.is_active, u.role_id,
+         r.name as role_name,
+         e.full_name, e.phone, e.store_id,
+         s.name as store_name
+       FROM pos_auth pa
+       JOIN user_account u ON pa.user_id = u.id
+       JOIN employee e ON u.id = e.user_id
+       JOIN role r ON u.role_id = r.id
+       LEFT JOIN store s ON e.store_id = s.id
+       WHERE pa.user_id = $1`,
+      [userId]
+    );
+    return rows[0] || null;
+  }
+
+  async findAvailableEmployees() {
+    const { rows } = await this.pool.query(
+      `SELECT
+         u.id, u.username, u.email, u.is_active, u.role_id,
+         r.name as role_name,
+         e.full_name, e.phone, e.store_id,
+         s.name as store_name
+       FROM user_account u
+       JOIN employee e ON u.id = e.user_id
+       JOIN role r ON u.role_id = r.id
+       LEFT JOIN store s ON e.store_id = s.id
+       WHERE u.is_active = true
+         AND u.id NOT IN (SELECT user_id FROM pos_auth)
+         AND u.role_id IN (
+           SELECT rp.role_id FROM role_permission rp
+           JOIN permission p ON rp.permission_id = p.id
+           WHERE p.code = 'pos_access'
+         )
+       ORDER BY e.full_name ASC`
+    );
+    return rows;
+  }
+
+  async enablePosAuth(userId) {
+    const { rows } = await this.pool.query(
+      `UPDATE pos_auth SET is_enabled = true WHERE user_id = $1 RETURNING *`,
+      [userId]
+    );
+    return rows[0] || null;
+  }
+
+  async disablePosAuth(userId) {
+    const { rows } = await this.pool.query(
+      `UPDATE pos_auth SET is_enabled = false WHERE user_id = $1 RETURNING *`,
+      [userId]
+    );
+    return rows[0] || null;
+  }
+
+  async deletePosAuth(userId) {
+    await this.pool.query(`DELETE FROM pos_auth WHERE user_id = $1`, [userId]);
   }
 }
 

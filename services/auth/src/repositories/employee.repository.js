@@ -10,7 +10,7 @@ class EmployeeRepository {
     async findAll(filters = {}) {
         let query = `
             SELECT 
-                u.id, u.username, u.email, u.is_active, u.last_login,
+                u.id, u.username, u.email, u.is_active, u.last_login, u.role_id,
                 r.name as role_name,
                 e.full_name, e.address, e.phone, e.gender, e.dob, e.store_id,
                 s.name as store_name
@@ -27,6 +27,16 @@ class EmployeeRepository {
              query += ` AND e.store_id = $${params.length}`;
         }
 
+        if (filters.search) {
+            params.push(`%${filters.search}%`);
+            query += ` AND (e.full_name ILIKE $${params.length} OR e.phone ILIKE $${params.length})`;
+        }
+
+        if (filters.isActive !== undefined) {
+            params.push(filters.isActive === 'true' || filters.isActive === true);
+            query += ` AND u.is_active = $${params.length}`;
+        }
+
         query += ' ORDER BY u.id DESC';
         const { rows } = await this.pool.query(query, params);
         return rows;
@@ -35,7 +45,7 @@ class EmployeeRepository {
     async findById(userId) {
         const query = `
             SELECT 
-                u.id, u.username, u.email, u.is_active, u.last_login,
+                u.id, u.username, u.email, u.is_active, u.last_login, u.role_id,
                 r.name as role_name,
                 e.full_name, e.address, e.phone, e.gender, e.dob, e.store_id,
                 s.name as store_name

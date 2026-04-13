@@ -11,6 +11,22 @@ class CustomerService {
   }
 
   /**
+   * Get default guest customer for POS use.
+   * Always returns a virtual walk-in customer placeholder.
+   * Real customers (even with guest type) are individual people — not suitable as default.
+   */
+  async getDefaultGuest() {
+    return {
+      id: 'virtual-guest',
+      fullName: 'Walk-in Customer',
+      phone: '',
+      customerType: 'guest',
+      isVirtual: true,
+      isActive: true
+    };
+  }
+
+  /**
    * Format DB row → frontend-friendly object
    */
   formatCustomer(row) {

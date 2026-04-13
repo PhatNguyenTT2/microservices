@@ -9,10 +9,12 @@ class RoleRepository {
 
   async findAll() {
     const { rows } = await this.pool.query(
-      `SELECT r.*, COALESCE(
-        json_agg(json_build_object('id', p.id, 'code', p.code, 'description', p.description))
-        FILTER (WHERE p.id IS NOT NULL), '[]'
-       ) as permissions
+      `SELECT r.*,
+        COALESCE(
+          json_agg(json_build_object('id', p.id, 'code', p.code, 'description', p.description))
+          FILTER (WHERE p.id IS NOT NULL), '[]'
+        ) as permissions,
+        (SELECT COUNT(*) FROM user_account ua WHERE ua.role_id = r.id)::int as employee_count
        FROM role r
        LEFT JOIN role_permission rp ON r.id = rp.role_id
        LEFT JOIN permission p ON rp.permission_id = p.id
@@ -24,10 +26,12 @@ class RoleRepository {
 
   async findById(id) {
     const { rows } = await this.pool.query(
-      `SELECT r.*, COALESCE(
-        json_agg(json_build_object('id', p.id, 'code', p.code, 'description', p.description))
-        FILTER (WHERE p.id IS NOT NULL), '[]'
-       ) as permissions
+      `SELECT r.*,
+        COALESCE(
+          json_agg(json_build_object('id', p.id, 'code', p.code, 'description', p.description))
+          FILTER (WHERE p.id IS NOT NULL), '[]'
+        ) as permissions,
+        (SELECT COUNT(*) FROM user_account ua WHERE ua.role_id = r.id)::int as employee_count
        FROM role r
        LEFT JOIN role_permission rp ON r.id = rp.role_id
        LEFT JOIN permission p ON rp.permission_id = p.id
@@ -36,6 +40,36 @@ class RoleRepository {
       [id]
     );
     return rows[0] || null;
+  }
+
+  async search(query) {
+    const pattern = `%${query}%`;
+    const { rows } = await this.pool.query(
+      `SELECT r.*,
+        COALESCE(
+          json_agg(json_build_object('id', p.id, 'code', p.code, 'description', p.description))
+          FILTER (WHERE p.id IS NOT NULL), '[]'
+        ) as permissions,
+        (SELECT COUNT(*) FROM user_account ua WHERE ua.role_id = r.id)::int as employee_count
+       FROM role r
+       LEFT JOIN role_permission rp ON r.id = rp.role_id
+       LEFT JOIN permission p ON rp.permission_id = p.id
+       WHERE r.name ILIKE $1 OR r.description ILIKE $1
+       GROUP BY r.id
+       ORDER BY r.name`,
+      [pattern]
+    );
+    return rows;
+  }
+
+  async findPermissionIdsByCodes(codes) {
+    if (!codes || codes.length === 0) return [];
+    const placeholders = codes.map((_, i) => `$${i + 1}`).join(', ');
+    const { rows } = await this.pool.query(
+      `SELECT id FROM permission WHERE code IN (${placeholders})`,
+      codes
+    );
+    return rows.map(r => r.id);
   }
 
   async findByName(name) {

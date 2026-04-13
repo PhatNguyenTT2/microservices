@@ -29,7 +29,8 @@ class ProductService {
             categoryId: row.category_id,
             categoryName: row.category_name || '',
             category: row.category_name ? { id: row.category_id, name: row.category_name } : null,
-            vendor: row.vendor || ''
+            vendor: row.vendor || '',
+            isPerishable: row.is_perishable || false
         };
     }
 

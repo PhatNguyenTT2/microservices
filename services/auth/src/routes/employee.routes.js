@@ -1,16 +1,16 @@
 const { verifyToken } = require('../../../../shared/auth-middleware');
-const { success, paginated } = require('../../../../shared/common/response');
+const { success } = require('../../../../shared/common/response');
 
 module.exports = function employeeRoutes(employeeService) {
   const router = require('express').Router();
 
-  // GET /api/employees — filtered by caller's storeId
+  // GET /api/employees?search=xxx&isActive=true
   router.get('/', verifyToken, async (req, res, next) => {
     try {
       const callerStoreId = req.user.storeId || null;
-      const rows = await employeeService.list(callerStoreId, req.query);
-      const items = Array.isArray(rows) ? rows : [];
-      paginated(res, { items, total: items.length, page: req.query.page || 1, limit: req.query.limit || 100 });
+      const { search, isActive } = req.query;
+      const result = await employeeService.list(callerStoreId, { search, isActive });
+      success(res, result);
     } catch (err) { next(err); }
   });
 
@@ -22,7 +22,7 @@ module.exports = function employeeRoutes(employeeService) {
     } catch (err) { next(err); }
   });
 
-  // POST /api/employees — callerStoreId auto-fills store_id for Store Admins
+  // POST /api/employees
   router.post('/', verifyToken, async (req, res, next) => {
     try {
       const callerStoreId = req.user.storeId || null;
@@ -42,10 +42,11 @@ module.exports = function employeeRoutes(employeeService) {
   // DELETE /api/employees/:id
   router.delete('/:id', verifyToken, async (req, res, next) => {
     try {
-      await employeeService.delete(parseInt(req.params.id));
-      success(res, { message: 'Employee deleted' });
+      const result = await employeeService.delete(parseInt(req.params.id));
+      success(res, result);
     } catch (err) { next(err); }
   });
 
   return router;
 };
+

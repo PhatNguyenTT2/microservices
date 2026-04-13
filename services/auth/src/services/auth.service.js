@@ -1,7 +1,7 @@
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { generateToken } = require('../../../../shared/auth-middleware');
-const { UnauthorizedError, ValidationError, ConflictError } = require('../../../../shared/common/errors');
+const { UnauthorizedError, ValidationError, ConflictError, PinInvalidError, PinLockedError } = require('../../../../shared/common/errors');
 const { SALT_ROUNDS, TOKEN_EXPIRY } = require('../../../../shared/common/constants');
 
 class AuthService {
@@ -34,6 +34,7 @@ class AuthService {
       id: user.id,
       username: user.username,
       role: user.role_id,
+      roleName: user.role_name || 'Employee',
       permissions,
       storeId: employee?.store_id || null
     });
@@ -168,8 +169,9 @@ class AuthService {
         id: newUser.id,
         username,
         role: role.id,
+        roleName: 'Customer',
         permissions,
-        storeId: null // Customers are chain-level
+        storeId: null
       });
 
       return {
@@ -213,38 +215,73 @@ class AuthService {
     };
   }
 
-  async posLogin({ employeeCode, pin }) {
-    if (!employeeCode || !pin) {
-      throw new ValidationError('Employee code and PIN are required');
+  async posLogin({ employeeId, pin }) {
+    if (!employeeId || !pin) {
+      throw new ValidationError('Employee ID and PIN are required');
     }
 
-    const user = await this.userRepo.findByUsername(employeeCode);
-    if (!user) throw new UnauthorizedError('Invalid employee code or PIN');
+    const userId = parseInt(employeeId);
+    if (isNaN(userId)) throw new ValidationError('Employee ID must be a number');
+
+    const user = await this.userRepo.findById(userId);
+    if (!user) throw new UnauthorizedError('Invalid employee ID or PIN');
     if (!user.is_active) throw new UnauthorizedError('Account is inactive');
 
-    const posAuth = await this.authRepo.findPosAuth(user.id);
+    const posAuth = await this.authRepo.findPosAuth(userId);
     if (!posAuth || !posAuth.is_enabled) {
       throw new UnauthorizedError('POS access not enabled for this account');
     }
 
+    // Fetch security config from settings service (with fallback defaults)
+    let maxAttempts = 5, lockMinutes = 30;
+    try {
+      const http = require('http');
+      const config = await new Promise((resolve, reject) => {
+        const req = http.get('http://settings:3004/api/internal/security-config', (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => {
+            try { resolve(JSON.parse(data)); } catch { resolve(null); }
+          });
+        });
+        req.on('error', () => resolve(null));
+        req.setTimeout(2000, () => { req.destroy(); resolve(null); });
+      });
+      if (config?.data) {
+        maxAttempts = config.data.max_failed_attempts ?? maxAttempts;
+        lockMinutes = config.data.lock_duration_minutes ?? lockMinutes;
+      }
+    } catch { /* Use defaults */ }
+
+    // Check if account is locked
     if (posAuth.locked_until && new Date(posAuth.locked_until) > new Date()) {
-      throw new UnauthorizedError('Account locked. Try again later.');
+      const minutesLeft = Math.ceil((new Date(posAuth.locked_until) - new Date()) / 60000);
+      throw new PinLockedError(minutesLeft);
     }
 
     const valid = await bcrypt.compare(pin, posAuth.pin_hash);
     if (!valid) {
-      await this.authRepo.incrementPosFailedAttempts(user.id);
-      throw new UnauthorizedError('Invalid employee code or PIN');
+      const updated = await this.authRepo.incrementPosFailedAttempts(userId, maxAttempts, lockMinutes);
+      const attemptsRemaining = Math.max(0, maxAttempts - (updated?.failed_attempts || 0));
+
+      if (attemptsRemaining === 0) {
+        const minutesLeft = lockMinutes;
+        throw new PinLockedError(minutesLeft);
+      }
+
+      throw new PinInvalidError(attemptsRemaining);
     }
 
-    await this.authRepo.resetPosFailedAttempts(user.id);
+    await this.authRepo.resetPosFailedAttempts(userId);
 
-    const permissions = await this.userRepo.getPermissions(user.id);
-    const employee = await this.employeeRepo.findById(user.id);
+    const permissions = await this.userRepo.getPermissions(userId);
+    const employee = await this.employeeRepo.findById(userId);
 
     const token = generateToken({
       id: user.id, username: user.username,
-      role: user.role_id, permissions,
+      role: user.role_id,
+      roleName: user.role_name || 'Employee',
+      permissions,
       storeId: employee?.store_id || null,
       isPOS: true
     }, TOKEN_EXPIRY.POS);

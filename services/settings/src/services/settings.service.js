@@ -73,10 +73,14 @@ class SettingsService {
     if (!reason) throw new ValidationError('Change reason is required for audit trails');
     const allowed = [
       'auto_promotion_enabled', 'promotion_start_time', 'promotion_discount_percentage',
-      'discount_retail', 'discount_wholesale', 'discount_vip'
+      'discount_retail', 'discount_wholesale', 'discount_vip',
+      'apply_to_expiring_today', 'apply_to_expiring_tomorrow'
     ];
     const hasChanges = Object.keys(data).some(k => allowed.includes(k));
     if (!hasChanges) throw new ValidationError('No valid settings fields provided');
+
+    const promotionFields = ['auto_promotion_enabled', 'promotion_start_time', 'promotion_discount_percentage', 'apply_to_expiring_today', 'apply_to_expiring_tomorrow'];
+    const promotionChanged = Object.keys(data).some(k => promotionFields.includes(k));
 
     const client = await this.pool.connect();
     try {
@@ -93,6 +97,19 @@ class SettingsService {
       });
 
       await client.query('COMMIT');
+
+      // Notify Inventory scheduler if promotion config changed
+      if (promotionChanged) {
+        try {
+          const eventBus = require('../../../../shared/event-bus');
+          const EVENT = require('../../../../shared/event-bus/eventTypes');
+          await eventBus.publish(EVENT.SETTINGS_PROMOTION_UPDATED, newValue);
+        } catch (pubErr) {
+          // Non-critical — scheduler will pick up on next restart
+          console.error('Failed to publish promotion update event:', pubErr.message);
+        }
+      }
+
       return newValue;
     } catch (err) {
       await client.query('ROLLBACK');
@@ -100,6 +117,17 @@ class SettingsService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Get settings change history with pagination and optional type filter
+   */
+  async getHistory({ settingType, page, limit } = {}) {
+    return this.historyRepo.findAll({
+      settingType,
+      page: parseInt(page) || 1,
+      limit: parseInt(limit) || 20
+    });
   }
 }
 

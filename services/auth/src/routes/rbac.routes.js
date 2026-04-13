@@ -3,10 +3,11 @@ const { success } = require('../../../../shared/common/response');
 
 module.exports = function rbacRoutes(rbacService) {
   const router = require('express').Router();
-  // GET /api/roles
+  // GET /api/roles?search=xxx
   router.get('/roles', verifyToken, async (req, res, next) => {
     try {
-      const result = await rbacService.listRoles();
+      const { search } = req.query;
+      const result = await rbacService.listRoles({ search });
       success(res, result);
     } catch (err) { next(err); }
   });
