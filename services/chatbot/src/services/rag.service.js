@@ -6,15 +6,20 @@
  * Step 4: RRF Fusion → Top 5
  * Step 5: Co-purchase Enrichment
  * Step 6: Personalization
+ * Step 5: Hybrid Ensemble (Phase 3: α×Content + β×CF + γ×Apriori + δ×Personal)
+ * Step 6: Session Context Boost (Phase 3B: rule-based cluster detection)
  * Step 7: Augmented Generation (Qwen/Qwen2.5-7B-Instruct)
  */
 const logger = require('../../../../shared/common/logger');
-const { getPersonalizationContext, getCoPurchaseContext } = require('./context.helper');
+const { getPersonalizationContext, getCoPurchaseContext, getCFHint } = require('./context.helper');
 
 class RAGService {
-    constructor({ knowledgeRepo, copurchaseRepo, embeddingClient, hfClient, apiClient, reformulator }) {
+    constructor({ knowledgeRepo, copurchaseRepo, cfService, hybridService, sessionContextService, embeddingClient, hfClient, apiClient, reformulator }) {
         this.knowledgeRepo = knowledgeRepo;
         this.copurchaseRepo = copurchaseRepo;
+        this.cfService = cfService || null;
+        this.hybridService = hybridService || null;
+        this.sessionContextService = sessionContextService || null;
         this.embeddingClient = embeddingClient;
         this.hfClient = hfClient;
         this.apiClient = apiClient;
@@ -74,10 +79,116 @@ class RAGService {
                 return this._buildNoResultsResponse(userMessage, storeId, startTime, metadata);
             }
 
+            // ── Phase 3: Hybrid Ensemble (replaces separate CF/Apriori steps) ──
+            let hybridResults = null;
+            let sessionIntent = null;
+
+            if (this.hybridService) {
+                // Step 5: Hybrid Ensemble
+                const stepStart5 = Date.now();
+                const customerContext = await getPersonalizationContext(this.apiClient, customerId);
+
+                hybridResults = await this.hybridService.score(
+                    top5, customerId, storeId, customerContext.type
+                );
+
+                // Step 6: Session Context Boost
+                if (this.sessionContextService && chatHistory.length > 0) {
+                    const productSequence = this.sessionContextService.extractProductSequence(chatHistory);
+                    sessionIntent = this.sessionContextService.inferSessionIntent(productSequence, userMessage);
+                    if (sessionIntent) {
+                        hybridResults = this.sessionContextService.applySessionBoost(hybridResults, sessionIntent);
+                    }
+                }
+
+                metadata.steps.hybrid = {
+                    engine: 'ensemble',
+                    weights: this.hybridService.getWeights(),
+                    resultCount: hybridResults.length,
+                    sessionCluster: sessionIntent?.cluster || null,
+                    latencyMs: Date.now() - stepStart5
+                };
+                metadata.steps.personalization = {
+                    customerType: customerContext.type,
+                    latencyMs: 0 // included in hybrid step
+                };
+
+                // Re-rank top5 by ensemble score
+                const rankedIds = hybridResults.slice(0, 5).map(r => r.product_id);
+                const enrichedTop5 = rankedIds.map(pid => {
+                    const original = top5.find(r => Number(r.product_id) === pid);
+                    const hybrid = hybridResults.find(r => r.product_id === pid);
+                    return original
+                        ? { ...original, ensemble_score: hybrid?.final_score, ensemble_sources: hybrid?.sources }
+                        : hybrid?.rawProduct
+                            ? { ...hybrid.rawProduct, ensemble_score: hybrid.final_score, ensemble_sources: hybrid.sources }
+                            : null;
+                }).filter(Boolean);
+
+                // Use enriched results if available
+                const finalProducts = enrichedTop5.length > 0 ? enrichedTop5 : top5;
+
+                // Step 7: Augmented Generation
+                const stepStart7 = Date.now();
+                const coPurchaseData = await getCoPurchaseContext(this.copurchaseRepo, finalProducts, storeId);
+                const response = await this._generateResponse(
+                    userMessage, query, finalProducts, coPurchaseData, [], customerContext
+                );
+                metadata.steps.generation = { latencyMs: Date.now() - stepStart7 };
+
+                const totalMs = Date.now() - startTime;
+                metadata.totalLatencyMs = totalMs;
+                logger.info({ storeId, customerId, totalMs, productCount: finalProducts.length, engine: 'hybrid' }, 'RAG pipeline completed');
+
+                // Auto-track: record 'recommended' feedback for weight learning
+                if (customerId && hybridResults.length > 0) {
+                    for (const r of hybridResults.slice(0, 5)) {
+                        this.hybridService.recordFeedback(
+                            customerId, r.product_id, storeId,
+                            r.topSource, 'recommended',
+                            null, r.final_score
+                        ).catch(() => {}); // fire-and-forget
+                    }
+                }
+
+                return {
+                    content: response.content,
+                    productIds: finalProducts.map(r => r.product_id),
+                    products: finalProducts.map(r => ({
+                        id: r.product_id,
+                        name: r.content?.match(/"([^"]+)"/)?.[1] || `Product ${r.product_id}`,
+                        categoryName: r.category_name,
+                        unitPrice: Number(r.unit_price),
+                        quantityOnShelf: r.quantity_on_shelf,
+                        rrfScore: r.rrf_score,
+                        ensembleScore: r.ensemble_score,
+                        ensembleSources: r.ensemble_sources
+                    })),
+                    metadata
+                };
+            }
+
+            // ── Fallback: Phase 2 pipeline (no hybrid service) ──
+
             // Step 5: Co-purchase Enrichment
             const stepStart5 = Date.now();
             const coPurchaseData = await getCoPurchaseContext(this.copurchaseRepo, top5, storeId);
             metadata.steps.coPurchase = { latencyMs: Date.now() - stepStart5 };
+
+            // Step 5.5: CF Enrichment (Phase 2 — if available)
+            let cfData = [];
+            if (this.cfService && customerId) {
+                try {
+                    const stepStartCF = Date.now();
+                    cfData = await this.cfService.getRecommendations(customerId, storeId, 3);
+                    metadata.steps.cf = {
+                        recommendations: cfData.length,
+                        latencyMs: Date.now() - stepStartCF
+                    };
+                } catch (err) {
+                    logger.warn({ err }, 'CF enrichment failed — skipping');
+                }
+            }
 
             // Step 6: Personalization
             const stepStart6 = Date.now();
@@ -90,14 +201,14 @@ class RAGService {
             // Step 7: Augmented Generation
             const stepStart7 = Date.now();
             const response = await this._generateResponse(
-                userMessage, query, top5, coPurchaseData, customerContext
+                userMessage, query, top5, coPurchaseData, cfData, customerContext
             );
             metadata.steps.generation = { latencyMs: Date.now() - stepStart7 };
 
             const totalMs = Date.now() - startTime;
             metadata.totalLatencyMs = totalMs;
 
-            logger.info({ storeId, customerId, totalMs, productCount: top5.length }, 'RAG pipeline completed');
+            logger.info({ storeId, customerId, totalMs, productCount: top5.length, engine: 'phase2-fallback' }, 'RAG pipeline completed');
 
             return {
                 content: response.content,
@@ -156,7 +267,7 @@ class RAGService {
     /**
      * Generate natural language response using Qwen/Qwen2.5-7B-Instruct
      */
-    async _generateResponse(originalMessage, reformulatedQuery, products, coPurchaseData, customerContext) {
+    async _generateResponse(originalMessage, reformulatedQuery, products, coPurchaseData, cfData, customerContext) {
         const productContext = products.map((p, i) => {
             const name = p.content.match(/"([^"]+)"/)?.[1] || `Product ${p.product_id}`;
             return `${i + 1}. ${name} — ${p.category_name}, ${Number(p.unit_price).toLocaleString('vi-VN')}đ, còn ${p.quantity_on_shelf} sản phẩm`;
@@ -164,10 +275,22 @@ class RAGService {
 
         let coPurchaseContext = '';
         if (coPurchaseData.length > 0) {
-            coPurchaseContext = '\n\nSản phẩm thường mua kèm:\n' +
-                coPurchaseData.map(cp =>
-                    `- Khách mua "${cp.productName}" thường mua kèm: ${cp.relatedProducts.map(r => `Product #${r.product_id_b}`).join(', ')}`
-                ).join('\n');
+            coPurchaseContext = '\n\nSản phẩm thường mua kèm (Apriori):\n' +
+                coPurchaseData.map(cp => {
+                    const items = cp.relatedProducts.map(r => {
+                        const conf = Number(r.confidence) > 0
+                            ? ` (${Math.round(r.confidence * 100)}% mua kèm)`
+                            : '';
+                        return `Product #${r.product_id_b}${conf}`;
+                    });
+                    return `- Khách mua "${cp.productName}" thường mua kèm: ${items.join(', ')}`;
+                }).join('\n');
+        }
+
+        let cfContext = '';
+        if (cfData.length > 0) {
+            cfContext = '\n\nGợi ý cá nhân hóa (dựa trên lịch sử mua):\n' +
+                cfData.map(r => `- Product #${r.product_id} (điểm phù hợp: ${r.prediction_score})`).join('\n');
         }
 
         const systemPrompt = `Bạn là nhân viên tư vấn siêu thị POSMART. Trả lời bằng tiếng Việt, thân thiện, ngắn gọn.
@@ -175,7 +298,7 @@ CHỈ sử dụng dữ liệu sản phẩm được cung cấp bên dưới. KH�
 ${customerContext.prompt}
 
 Dữ liệu sản phẩm phù hợp:
-${productContext}${coPurchaseContext}`;
+${productContext}${coPurchaseContext}${cfContext}`;
 
         try {
             // Use raw HF client to inject custom RAG system prompt

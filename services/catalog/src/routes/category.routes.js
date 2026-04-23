@@ -4,8 +4,8 @@ const { verifyToken } = require('../../../../shared/auth-middleware');
 function createCategoryRouter(categoryService) {
     const router = express.Router();
 
-    // GET all categories (flat list, with optional filters)
-    router.get('/', verifyToken, async (req, res, next) => {
+    // GET all categories (flat list, with optional filters) — public read access
+    router.get('/', async (req, res, next) => {
         try {
             const filters = {
                 search: req.query.search,
@@ -21,8 +21,8 @@ function createCategoryRouter(categoryService) {
         }
     });
 
-    // GET category tree (nested: roots with children[])
-    router.get('/tree', verifyToken, async (req, res, next) => {
+    // GET category tree (nested: roots with children[]) — public read access
+    router.get('/tree', async (req, res, next) => {
         try {
             const tree = await categoryService.getCategoryTree();
             res.json({
@@ -47,8 +47,8 @@ function createCategoryRouter(categoryService) {
         }
     });
 
-    // GET category by ID
-    router.get('/:id', verifyToken, async (req, res, next) => {
+    // GET category by ID — public read access
+    router.get('/:id', async (req, res, next) => {
         try {
             const category = await categoryService.getCategoryById(req.params.id);
             res.json({

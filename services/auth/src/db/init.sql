@@ -121,26 +121,3 @@ BEGIN
   END IF;
 END
 $$;
-
--- ==========================================
--- 6. SEED DATA: CUSTOMERS
--- Walk-in customers (user_id = NULL)
--- ==========================================
-
-INSERT INTO customer (user_id, full_name, phone, address, gender, dob, total_spent, customer_type) VALUES
-(NULL, 'Nguyễn Văn An', '0901234567', '123 Nguyễn Huệ, Q.1, TP.HCM', 'Male', '1990-05-15', 2500000, 'vip'),
-(NULL, 'Trần Thị Bích', '0912345678', '45 Lê Lợi, Q.1, TP.HCM', 'Female', '1988-11-22', 1200000, 'retail'),
-(NULL, 'Phạm Minh Châu', '0923456789', '78 Hai Bà Trưng, Q.3, TP.HCM', 'Female', '1995-03-10', 850000, 'retail'),
-(NULL, 'Lê Hoàng Dũng', '0934567890', '200 Cách Mạng Tháng 8, Q.10, TP.HCM', 'Male', '1985-07-28', 5600000, 'vip'),
-(NULL, 'Võ Thị Hồng', '0945678901', '12 Phan Xích Long, Phú Nhuận, TP.HCM', 'Female', '1992-09-05', 320000, 'retail'),
-(NULL, 'Huỳnh Quốc Khánh', '0956789012', '56 Nguyễn Đình Chiểu, Q.3, TP.HCM', 'Male', '1998-01-18', 0, 'guest'),
-(NULL, 'Đặng Thị Mai Lan', '0967890123', '89 Võ Văn Tần, Q.3, TP.HCM', 'Female', '1991-12-30', 4200000, 'wholesale'),
-(NULL, 'Bùi Văn Minh', '0978901234', '34 Trần Hưng Đạo, Q.5, TP.HCM', 'Male', '1987-06-14', 1800000, 'retail'),
-(NULL, 'Ngô Thị Ngọc', '0989012345', '67 Lý Tự Trọng, Q.1, TP.HCM', 'Female', '1993-04-22', 960000, 'retail'),
-(NULL, 'Đỗ Thanh Phong', '0990123456', '101 Điện Biên Phủ, Bình Thạnh, TP.HCM', 'Male', '1996-08-09', 0, 'guest'),
-(NULL, 'Trịnh Thị Quỳnh', '0901122334', '23 Nguyễn Thị Minh Khai, Q.1, TP.HCM', 'Female', '1989-02-17', 3100000, 'vip'),
-(NULL, 'Lý Văn Sơn', '0912233445', '45 Pasteur, Q.1, TP.HCM', 'Male', '1994-10-03', 750000, 'retail'),
-(NULL, 'Vũ Thị Trang', '0923344556', '78 Nguyễn Trãi, Q.5, TP.HCM', 'Female', '1997-07-25', 1450000, 'retail'),
-(NULL, 'Hoàng Đức Uy', '0934455667', '150 Lê Văn Sỹ, Q.3, TP.HCM', 'Male', '1986-11-11', 8900000, 'wholesale'),
-(NULL, 'Phan Thị Xuân', '0945566778', '33 Trường Chinh, Tân Bình, TP.HCM', 'Female', '1999-05-30', 220000, 'guest')
-ON CONFLICT DO NOTHING;

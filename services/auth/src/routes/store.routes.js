@@ -1,4 +1,5 @@
 const express = require('express');
+const { verifyToken } = require('../../../../shared/auth-middleware');
 
 function createStoreRouter(storeService) {
     const router = express.Router();
@@ -24,7 +25,7 @@ function createStoreRouter(storeService) {
     });
 
     // Tạo mới cửa hàng
-    router.post('/', async (req, res, next) => {
+    router.post('/', verifyToken, async (req, res, next) => {
         try {
             const newStore = await storeService.createStore(req.body);
             res.status(201).json({ status: 'success', data: { store: newStore } });
@@ -34,7 +35,7 @@ function createStoreRouter(storeService) {
     });
     
     // Cập nhật cửa hàng
-    router.put('/:id', async (req, res, next) => {
+    router.put('/:id', verifyToken, async (req, res, next) => {
          try {
               const updatedStore = await storeService.updateStore(req.params.id, req.body);
               res.json({ status: 'success', data: { store: updatedStore } });

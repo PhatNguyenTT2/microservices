@@ -21,20 +21,33 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
  */
 function initChatSocket(io, chatService) {
 
-    // ── Auth Middleware: verify JWT from handshake ──
+    // ── Auth Middleware: verify JWT or accept guestId ──
     io.use((socket, next) => {
         const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.replace('Bearer ', '');
-        if (!token) {
-            return next(new Error('UNAUTHORIZED: Token required'));
+        const guestId = socket.handshake.auth?.guestId;
+
+        // Path A: Authenticated user (JWT)
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, JWT_SECRET);
+                socket.user = decoded;
+                return next();
+            } catch (err) {
+                return next(new Error('UNAUTHORIZED: Invalid token'));
+            }
         }
 
-        try {
-            const decoded = jwt.verify(token, JWT_SECRET);
-            socket.user = decoded;
-            next();
-        } catch (err) {
-            return next(new Error('UNAUTHORIZED: Invalid token'));
+        // Path B: Guest user (UUID)
+        if (guestId) {
+            socket.user = {
+                id: `guest_${guestId}`,
+                roleName: 'Guest',
+                storeId: null
+            };
+            return next();
         }
+
+        return next(new Error('UNAUTHORIZED: Token or guestId required'));
     });
 
     io.on('connection', (socket) => {

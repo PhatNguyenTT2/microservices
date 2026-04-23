@@ -5,8 +5,8 @@ const { verifyToken } = require('../../../../shared/auth-middleware');
 function createProductRouter(productService) {
     const router = express.Router();
 
-    // GET all products (with filters + pagination)
-    router.get('/', verifyToken, async (req, res, next) => {
+    // GET all products (with filters + pagination) — public read access
+    router.get('/', async (req, res, next) => {
         try {
             const { categoryId, search, isActive, vendor, page, per_page, sort, order } = req.query;
             const filters = {
@@ -39,8 +39,8 @@ function createProductRouter(productService) {
         }
     });
 
-    // GET product by ID
-    router.get('/:id', verifyToken, async (req, res, next) => {
+    // GET product by ID — public read access
+    router.get('/:id', async (req, res, next) => {
         try {
             const product = await productService.getProductById(req.params.id);
             res.json({

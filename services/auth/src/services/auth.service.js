@@ -129,7 +129,7 @@ class AuthService {
    * Customer Self-Registration (Public API for online web store)
    * Creates: user_account (role=Customer) + customer profile, returns JWT for immediate use
    */
-  async registerCustomer({ fullName, email, password, phone, gender, dob }) {
+  async registerCustomer({ fullName, username, email, password, phone, address, gender, dob }) {
     if (!fullName || !email || !password) {
       throw new ValidationError('fullName, email, and password are required');
     }
@@ -139,6 +139,14 @@ class AuthService {
 
     const existingEmail = await this.userRepo.findByEmail(email);
     if (existingEmail) throw new ConflictError('Email already exists');
+
+    // Use provided username or auto-generate from email
+    const finalUsername = username || email.split('@')[0] + '_' + Date.now().toString(36);
+
+    if (username) {
+      const existingUsername = await this.userRepo.findByUsername(username);
+      if (existingUsername) throw new ConflictError('Username already exists');
+    }
 
     const client = await this.pool.connect();
     try {
@@ -151,14 +159,13 @@ class AuthService {
       }
 
       const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-      const username = email.split('@')[0] + '_' + Date.now().toString(36);
 
       const newUser = await this.userRepo.createWithClient(client, {
-        username, email, passwordHash, roleId: role.id
+        username: finalUsername, email, passwordHash, roleId: role.id
       });
 
       await this.customerRepo.create(client, {
-        userId: newUser.id, fullName, phone, gender, dob, customerType: 'retail'
+        userId: newUser.id, fullName, phone, address, gender, dob, customerType: 'retail'
       });
 
       await client.query('COMMIT');
@@ -167,7 +174,7 @@ class AuthService {
       const permissions = await this.userRepo.getPermissions(newUser.id);
       const token = generateToken({
         id: newUser.id,
-        username,
+        username: finalUsername,
         role: role.id,
         roleName: 'Customer',
         permissions,
@@ -178,7 +185,7 @@ class AuthService {
         token,
         user: {
           id: newUser.id,
-          username,
+          username: finalUsername,
           email,
           fullName,
           phone: phone || '',

@@ -24,7 +24,7 @@ function createApp({ authService, customerService, employeeService, rbacService,
   app.use('/api/auth', require('./routes/auth.routes')(authService));
   app.use('/api/customers', require('./routes/customer.routes')(customerService));
   app.use('/api/employees', require('./routes/employee.routes')(employeeService));
-  app.use('/api/stores', verifyToken, require('./routes/store.routes')(storeService));
+  app.use('/api/stores', require('./routes/store.routes')(storeService));
   app.use('/api', require('./routes/rbac.routes')(rbacService));
   app.use('/api/pos-auth', require('./routes/posAuth.routes')(posAuthService));
 

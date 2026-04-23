@@ -60,6 +60,39 @@ async function start() {
     const storeService = new StoreService(storeRepo);
     const posAuthService = new PosAuthService({ authRepo, employeeRepo, userRepo });
 
+    // 3b. Subscribe to domain events
+    const EVENT = require('../../../shared/event-bus/eventTypes');
+
+    await eventBus.subscribe(SERVICE_NAME, EVENT.ORDER_COMPLETED, async (message) => {
+      try {
+        const { customerId, items } = message.data || {};
+        if (!customerId || !items?.length) {
+          logger.warn({ messageId: message.id }, 'ORDER_COMPLETED: missing customerId or items');
+          return;
+        }
+
+        // Calculate order total from items
+        const orderTotal = items.reduce((sum, item) => {
+          return sum + (item.quantity * item.unitPrice);
+        }, 0);
+
+        if (orderTotal <= 0) return;
+
+        const updated = await customerRepo.incrementTotalSpent(customerId, orderTotal);
+        if (updated) {
+          logger.info(
+            { customerId, orderTotal, newTotalSpent: updated.total_spent },
+            'ORDER_COMPLETED: customer total_spent updated'
+          );
+        } else {
+          logger.warn({ customerId }, 'ORDER_COMPLETED: customer not found');
+        }
+      } catch (err) {
+        logger.error({ err, messageId: message.id }, 'ORDER_COMPLETED handler failed');
+      }
+    });
+    logger.info('Subscribed to order.completed (customer total_spent sync)');
+
     // 4. Create app — pool does NOT leak to app/routes layer
     const createApp = require('./app');
     const app = createApp({ authService, customerService, employeeService, rbacService, storeService, posAuthService });

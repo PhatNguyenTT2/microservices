@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS sale_order_detail (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     order_id BIGINT NOT NULL REFERENCES sale_order(id) ON DELETE CASCADE,
     
+    -- Liên kết sản phẩm (cross-service reference, no FK — Catalog ở DB riêng)
+    product_id BIGINT,                        -- ID sản phẩm gốc từ Catalog Service
+    
     -- Snapshot dữ liệu từ Service 2 (Catalog) và Service 6 (Inventory)
     product_name TEXT NOT NULL,               
     batch_id BIGINT NOT NULL,                 -- Thuộc Service 6
@@ -123,3 +126,14 @@ DO $$ BEGIN
     ALTER TABLE processed_events ADD CONSTRAINT processed_events_event_service_unique UNIQUE (event_id, service_name);
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
+
+-- ==========================================
+-- MIGRATION: Add product_id to sale_order_detail
+-- Critical for: revenue reports, inventory tracking, recommendation pipeline
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE sale_order_detail ADD COLUMN product_id BIGINT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_order_detail_product ON sale_order_detail(product_id);

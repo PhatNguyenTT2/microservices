@@ -129,6 +129,20 @@ class CustomerRepository {
   }
 
   /**
+   * Atomically increment total_spent for a customer.
+   * Used by ORDER_COMPLETED event handler.
+   */
+  async incrementTotalSpent(customerId, amount) {
+    const { rows } = await this.pool.query(
+      `UPDATE customer SET total_spent = total_spent + $2
+       WHERE id = $1
+       RETURNING id, full_name, total_spent`,
+      [customerId, amount]
+    );
+    return rows[0] || null;
+  }
+
+  /**
    * Hard delete — permanently remove (admin only)
    */
   async delete(id) {

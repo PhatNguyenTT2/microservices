@@ -13,15 +13,15 @@ class OrderDetailRepository {
     }
   
     async addDetailWithClient(client, orderId, data) {
-      const { product_name, batch_id, quantity, unit_price, total_price } = data;
+      const { product_id, product_name, batch_id, quantity, unit_price, total_price } = data;
       const query = `
         INSERT INTO sale_order_detail 
-        (order_id, product_name, batch_id, quantity, unit_price, total_price)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        (order_id, product_id, product_name, batch_id, quantity, unit_price, total_price)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING *
       `;
       const { rows } = await client.query(query, [
-        orderId, product_name, batch_id, quantity, unit_price, total_price
+        orderId, product_id || null, product_name, batch_id, quantity, unit_price, total_price
       ]);
       return rows[0];
     }

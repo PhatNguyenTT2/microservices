@@ -6,6 +6,55 @@ function createInventoryRouter(inventoryService, inventoryRepo, { catalogService
     const router = express.Router();
 
     /**
+     * GET /public/batches/:storeId/:productId — Customer-facing FEFO batch list
+     * PUBLIC: No auth required. Returns only active batches with on-shelf stock.
+     * Excludes sensitive fields: cost_price, notes, quantity_on_hand
+     */
+    router.get('/public/batches/:storeId/:productId', async (req, res, next) => {
+        try {
+            const storeId = parseInt(req.params.storeId);
+            const productId = parseInt(req.params.productId);
+
+            if (!storeId || !productId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'storeId and productId are required'
+                });
+            }
+
+            const batches = await inventoryRepo.getBatchesByProduct(storeId, productId);
+
+            // Filter: only active batches with stock on shelf
+            const publicBatches = batches
+                .filter(b => b.status === 'active' && parseInt(b.total_on_shelf) > 0)
+                .map(b => ({
+                    id: b.id,
+                    batchCode: `B-${b.id}`,
+                    unitPrice: parseFloat(b.unit_price) || 0,
+                    discountPercentage: parseFloat(b.discount_percentage) || 0,
+                    mfgDate: b.mfg_date,
+                    expiryDate: b.expiry_date,
+                    quantityAvailable: parseInt(b.total_on_shelf) || 0,
+                    promotionApplied: b.promotion_applied || 'none'
+                }));
+
+            const totalOnShelf = publicBatches.reduce((sum, b) => sum + b.quantityAvailable, 0);
+
+            res.json({
+                success: true,
+                data: {
+                    storeId,
+                    productId,
+                    totalOnShelf,
+                    batches: publicBatches
+                }
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    /**
      * GET /summary — Product-level inventory summary with catalog product info
      * Returns camelCase formatted data for frontend consumption
      */

@@ -73,22 +73,50 @@ async function start() {
     const dataIngestionService = new DataIngestionService(pool, embeddingClient, apiClient);
     const reformulator = new QueryReformulator(hfClient);
 
+    // Phase 2: Collaborative Filtering
+    const CollaborativeFilteringService = require('./services/cf.service');
+    const cfService = new CollaborativeFilteringService(pool);
+
+    // Phase 3: Hybrid Ensemble + Session Context + Weight Learning
+    const HybridRecommendationService = require('./services/hybrid.service');
+    const SessionContextService = require('./services/session-context.service');
+    const WeightLearner = require('./services/weight-learner');
+
+    const hybridService = new HybridRecommendationService({ copurchaseRepo, cfService, pool });
+    const sessionContextService = new SessionContextService();
+    const weightLearner = new WeightLearner(pool);
+
     let ragService = null;
     if (embeddingClient.isReady) {
       ragService = new RAGService({
         knowledgeRepo,
         copurchaseRepo,
+        cfService,
+        hybridService,
+        sessionContextService,
         embeddingClient,
         hfClient,
         apiClient,
         reformulator
       });
-      logger.info('RAG Service initialized (Hybrid Search + RRF)');
+
+      // Warm up hybrid cache (in-memory Apriori + CF similarities)
+      hybridService.warmUp(1).catch(err => {
+        logger.warn({ err }, 'Hybrid cache warmup failed — will use DB fallback');
+      });
+
+      logger.info('RAG Service initialized (Phase 3: Hybrid Ensemble + Session Context)');
     } else {
       logger.warn('RAG Service DISABLED — embedding model not loaded');
     }
 
     const chatService = new ChatService(chatRepo, hfClient, apiClient, ragService, copurchaseRepo);
+
+    // Phase 4: Nightly Batch Pipeline
+    const NightlyBatchPipeline = require('./jobs/nightly-batch');
+    const nightlyBatch = new NightlyBatchPipeline({
+      pool, hybridService, cfService, weightLearner, copurchaseRepo
+    });
 
     // 7. Subscribe to events (for RAG data ingestion)
     if (embeddingClient.isReady) {
@@ -116,6 +144,48 @@ async function start() {
         await dataIngestionService.handleOrderCompleted(message);
       });
 
+      // Phase 4 Task 5: Purchase event attribution tracking
+      if (EVENT.ORDER_CONFIRMED) {
+        await eventBus.subscribe(SERVICE_NAME, EVENT.ORDER_CONFIRMED, async (message) => {
+          try {
+            const { customerId, storeId, items } = message.data || {};
+            if (!customerId || !items?.length) return;
+
+            // Lookup products recommended in last 24h
+            const { rows } = await pool.query(`
+              SELECT DISTINCT product_id, source
+              FROM recommendation_feedback
+              WHERE user_id = $1 AND store_id = $2
+                AND action = 'recommended'
+                AND created_at > NOW() - INTERVAL '24 hours'
+            `, [customerId, storeId]);
+
+            if (rows.length === 0) return;
+
+            const recommendedMap = new Map(rows.map(r => [Number(r.product_id), r.source]));
+
+            let attributedCount = 0;
+            for (const item of items) {
+              const source = recommendedMap.get(Number(item.productId));
+              if (source) {
+                await hybridService.recordFeedback(
+                  customerId, item.productId, storeId, source, 'purchased'
+                );
+                attributedCount++;
+              }
+            }
+
+            if (attributedCount > 0) {
+              logger.info({ customerId, storeId, attributedCount, totalItems: items.length },
+                'Purchase attribution: matched recommended products');
+            }
+          } catch (err) {
+            logger.warn({ err }, 'Purchase attribution tracking failed — non-critical');
+          }
+        });
+        logger.info('Purchase attribution tracking registered (order.confirmed)');
+      }
+
       logger.info('Event subscriptions registered (product.*, inventory.updated, order.completed)');
 
       // 8. Cron fallback: full sync every 30 minutes
@@ -129,6 +199,11 @@ async function start() {
         }
       });
       logger.info('Cron scheduled: full sync every 30 minutes');
+
+      // Phase 4: Nightly batch pipeline (Apriori → CF → Weights → Warmup)
+      if (process.env.ENABLE_CRON !== 'false') {
+        nightlyBatch.start('0 2 * * *');
+      }
 
       // Initial sync on startup (after 10s delay to let other services start)
       setTimeout(async () => {
@@ -144,7 +219,7 @@ async function start() {
 
     // 9. Create Express app
     const createApp = require('./app');
-    const app = createApp({ chatService, knowledgeRepo });
+    const app = createApp({ chatService, knowledgeRepo, hybridService, pool, nightlyBatch, weightLearner });
     app.locals.db = pool;
 
     // 10. Create HTTP server + Socket.IO

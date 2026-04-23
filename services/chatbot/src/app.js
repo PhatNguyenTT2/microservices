@@ -7,9 +7,9 @@ const healthRoutes = require('./routes/health.routes');
 
 /**
  * Create Express app with dependency injection.
- * @param {object} deps - { chatService, knowledgeRepo }
+ * @param {object} deps - { chatService, knowledgeRepo, hybridService, pool, nightlyBatch }
  */
-function createApp({ chatService, knowledgeRepo }) {
+function createApp({ chatService, knowledgeRepo, hybridService, pool, nightlyBatch, weightLearner }) {
   const app = express();
 
   app.use(helmet());
@@ -29,6 +29,11 @@ function createApp({ chatService, knowledgeRepo }) {
   // Chat API with rate limiting
   app.use('/api/chat', chatLimiter, require('./routes/chat.routes')(chatService));
 
+  // Feedback API (Phase 3 — recommendation feedback loop)
+  if (hybridService) {
+    app.use('/api/chatbot', require('./routes/feedback.routes')(hybridService));
+  }
+
   // RAG stats (for monitoring/debug)
   if (knowledgeRepo) {
     app.get('/api/rag/stats', async (req, res, next) => {
@@ -40,6 +45,11 @@ function createApp({ chatService, knowledgeRepo }) {
         next(err);
       }
     });
+  }
+
+  // Phase 4: Monitoring & Observability API
+  if (pool) {
+    app.use('/api/chatbot', require('./routes/stats.routes')({ pool, hybridService, nightlyBatch, weightLearner }));
   }
 
   // Error handler (must be last)

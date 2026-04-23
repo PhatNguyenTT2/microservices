@@ -60,6 +60,7 @@ class OrderService {
         // Manual batch selection (fresh products) → keep
         if (item.batch_id) {
           allocatedItems.push({
+            product_id: item.product_id,
             product_name: item.product_name,
             batch_id: item.batch_id,
             quantity: item.quantity,
@@ -88,6 +89,7 @@ class OrderService {
           if (remaining <= 0) break;
           const qty = Math.min(remaining, batch.totalOnShelf);
           allocatedItems.push({
+            product_id: item.product_id,
             product_name: item.product_name,
             batch_id: batch.id,
             quantity: qty,
@@ -136,6 +138,7 @@ class OrderService {
       return {
         id: row.id,
         orderId: row.order_id,
+        productId: row.product_id,
         productName: row.product_name,
         batchId: row.batch_id,
         quantity: row.quantity,
@@ -262,7 +265,7 @@ class OrderService {
         if (newStatus === 'delivered') {
           const details = await this.detailRepo.findByOrderId(id);
           const completedItems = details.map(d => ({
-            productId: null,
+            productId: d.product_id,
             productName: d.product_name,
             batchId: d.batch_id,
             quantity: d.quantity,
@@ -326,7 +329,7 @@ class OrderService {
               if (status === 'delivered') {
                 const details = await this.detailRepo.findByOrderId(id);
                 const completedItems = details.map(d => ({
-                  productId: null,       // Will be resolved by chatbot via batch lookup
+                  productId: d.product_id,
                   productName: d.product_name,
                   batchId: d.batch_id,
                   quantity: d.quantity,

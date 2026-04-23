@@ -104,3 +104,133 @@ CREATE TABLE IF NOT EXISTS processed_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_processed_events_id ON processed_events(event_id);
+
+-- ============================================================
+-- MIGRATION: Apriori Metrics (Phase 1B)
+-- Adds support, confidence, lift to co_purchase_stats
+-- ============================================================
+
+DO $$ BEGIN
+    ALTER TABLE co_purchase_stats ADD COLUMN support NUMERIC DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE co_purchase_stats ADD COLUMN confidence_ab NUMERIC DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE co_purchase_stats ADD COLUMN confidence_ba NUMERIC DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE co_purchase_stats ADD COLUMN lift NUMERIC DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+DO $$ BEGIN
+    ALTER TABLE co_purchase_stats ADD COLUMN total_orders INT DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- Partial index: only rows with meaningful lift
+CREATE INDEX IF NOT EXISTS idx_copurchase_lift
+    ON co_purchase_stats(product_id_a, store_id)
+    WHERE lift > 1;
+
+-- Single-item order frequency (denominator for confidence)
+CREATE TABLE IF NOT EXISTS product_order_frequency (
+    product_id BIGINT NOT NULL,
+    store_id BIGINT NOT NULL,
+    order_count INT DEFAULT 0,
+    last_computed_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (product_id, store_id)
+);
+
+-- ============================================================
+-- Phase 2: Item-based Collaborative Filtering
+-- ============================================================
+
+-- User-item interaction matrix (implicit feedback from orders)
+CREATE TABLE IF NOT EXISTS user_product_interaction (
+    user_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    store_id BIGINT NOT NULL,
+    purchase_count INT DEFAULT 0,
+    total_quantity INT DEFAULT 0,
+    last_purchased_at TIMESTAMPTZ,
+    interaction_score NUMERIC DEFAULT 0,
+    PRIMARY KEY (user_id, product_id, store_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_interaction_user
+    ON user_product_interaction(user_id, store_id);
+
+CREATE INDEX IF NOT EXISTS idx_interaction_product
+    ON user_product_interaction(product_id, store_id);
+
+-- Pre-computed item similarity (nightly batch — Adjusted Cosine)
+CREATE TABLE IF NOT EXISTS item_similarity (
+    item_a BIGINT NOT NULL,
+    item_b BIGINT NOT NULL,
+    store_id BIGINT NOT NULL,
+    similarity NUMERIC NOT NULL,
+    common_users INT DEFAULT 0,
+    computed_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (item_a, item_b, store_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_item_sim_lookup
+    ON item_similarity(item_a, store_id)
+    WHERE similarity >= 0.3;
+
+-- ============================================================
+-- Phase 3: Hybrid Ensemble + Feedback Loop
+-- ============================================================
+
+-- Recommendation feedback (for adaptive weight learning)
+CREATE TABLE IF NOT EXISTS recommendation_feedback (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT,
+    product_id BIGINT,
+    store_id BIGINT NOT NULL,
+    source TEXT NOT NULL,
+    action TEXT NOT NULL,
+    session_id TEXT,
+    recommendation_score NUMERIC,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_user
+    ON recommendation_feedback(user_id, store_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_source_action
+    ON recommendation_feedback(source, action, store_id);
+
+-- Ensemble weight configuration (per store, tunable)
+CREATE TABLE IF NOT EXISTS ensemble_weights (
+    store_id BIGINT PRIMARY KEY,
+    alpha NUMERIC DEFAULT 0.40,
+    beta NUMERIC DEFAULT 0.25,
+    gamma NUMERIC DEFAULT 0.25,
+    delta NUMERIC DEFAULT 0.10,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Phase 5: Weight history log (for trend visualization in AI Dashboard)
+CREATE TABLE IF NOT EXISTS ensemble_weights_history (
+    id BIGSERIAL PRIMARY KEY,
+    store_id BIGINT NOT NULL,
+    alpha NUMERIC NOT NULL,
+    beta NUMERIC NOT NULL,
+    gamma NUMERIC NOT NULL,
+    delta NUMERIC NOT NULL,
+    feedback_count INT DEFAULT 0,
+    trigger_type TEXT DEFAULT 'nightly',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_weight_history_store_date
+    ON ensemble_weights_history(store_id, created_at DESC);

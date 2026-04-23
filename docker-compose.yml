@@ -69,7 +69,7 @@ services:
     restart: on-failure
     environment:
       - PORT=3002
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=${CATALOG_DATABASE_URL}
       - DB_SSL=${DB_SSL:-true}
       - RABBITMQ_URL=${RABBITMQ_URL}
       - JWT_SECRET=${JWT_SECRET}

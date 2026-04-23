@@ -60,9 +60,15 @@ async function getCoPurchaseHint(copurchaseRepo, productIds, storeId, limit = 3)
         if (allRelated.length === 0) return '';
 
         return 'Sản phẩm thường mua kèm: ' +
-            allRelated.map(cp =>
-                `Product #${cp.productId} → ${cp.related.map(r => `Product #${r.product_id_b}`).join(', ')}`
-            ).join('; ');
+            allRelated.map(cp => {
+                const items = cp.related.map(r => {
+                    const conf = Number(r.confidence) > 0
+                        ? ` (${Math.round(r.confidence * 100)}% mua kèm)`
+                        : '';
+                    return `Product #${r.product_id_b}${conf}`;
+                });
+                return `Product #${cp.productId} → ${items.join(', ')}`;
+            }).join('; ');
     } catch (err) {
         logger.warn({ err }, 'Co-purchase lookup failed — skipping');
         return '';
@@ -89,7 +95,11 @@ async function getCoPurchaseContext(copurchaseRepo, topProducts, storeId) {
                 allRelated.push({
                     productId: product.product_id,
                     productName: product.content.match(/"([^"]+)"/)?.[1] || `Product ${product.product_id}`,
-                    relatedProducts: related
+                    relatedProducts: related.map(r => ({
+                        ...r,
+                        confidence: Number(r.confidence) || 0,
+                        lift: Number(r.lift) || 0
+                    }))
                 });
             }
         }
@@ -99,5 +109,27 @@ async function getCoPurchaseContext(copurchaseRepo, topProducts, storeId) {
         return [];
     }
 }
+/**
+ * Get CF-based recommendation hint for prompt injection.
+ * @param {object} cfService - CollaborativeFilteringService instance
+ * @param {number|null} customerId
+ * @param {number} storeId
+ * @param {number} limit
+ * @returns {string} Formatted CF hint for prompt injection
+ */
+async function getCFHint(cfService, customerId, storeId, limit = 3) {
+    if (!cfService || !customerId) return '';
 
-module.exports = { getPersonalizationContext, getCoPurchaseHint, getCoPurchaseContext };
+    try {
+        const recs = await cfService.getRecommendations(customerId, storeId, limit);
+        if (recs.length === 0) return '';
+
+        return 'Gợi ý cá nhân hóa (dựa trên lịch sử mua hàng của bạn): ' +
+            recs.map(r => `Product #${r.product_id} (điểm phù hợp: ${r.prediction_score})`).join(', ');
+    } catch (err) {
+        logger.warn({ err }, 'CF hint generation failed — skipping');
+        return '';
+    }
+}
+
+module.exports = { getPersonalizationContext, getCoPurchaseHint, getCoPurchaseContext, getCFHint };
