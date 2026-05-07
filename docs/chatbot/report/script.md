@@ -154,7 +154,7 @@ Vì dữ liệu siêu thị là **'Implicit Feedback'** (phản hồi ngầm t�
 
 2. Vào **2:00 AM mỗi đêm**, Job WeightLearner sẽ tính toán lại tỷ lệ chuyển đổi (Conversion Rate) cho từng nguồn bằng công thức:
 
-$$score(source) = purchased \times 1.0 + added\_to\_cart \times 0.5 + clicked \times 0.2$$
+$$score(source) = purchased \times 1.0 + added\_to\_cart \times 0.5 + clicked \times 0.2 + hovered \times 0.1$$
 
 3. Để giữ cho mô hình ổn định, em áp dụng kỹ thuật **Exponential Smoothing**:
 
@@ -209,9 +209,40 @@ $$smoothed = 0.8 \times current\_weight + 0.2 \times raw\_weight$$
 
 ---
 
-## V. Phương án Cải tiến trong Tương lai (3 phút)
+## V. Phương án Cải tiến: Hover Dwell Behavior (3 phút)
 
-"Kính thưa Hội đồng, hệ thống hiện tại được tối ưu hóa cho giai đoạn 'Khởi động' của một doanh nghiệp. Để hệ thống có thể mở rộng (Scale) lên mức hàng triệu tương tác, em đề xuất 3 phương án cải tiến sau:"
+"Kính thưa Hội đồng, em xin trình bày một cải tiến quan trọng mà em đã triển khai để nâng cao chất lượng dữ liệu huấn luyện AI."
+
+### 5.1 Vấn đề: Khoảng trống dữ liệu trong phễu chuyển đổi
+
+"Trước khi cải tiến, phễu của em chỉ có 4 bước: **Gợi ý → Click → Giỏ hàng → Mua**. Khoảng cách giữa 'Gợi ý' và 'Click' là một **vùng mù dữ liệu (Data Blind Spot)** — em không biết khách hàng có *nhìn* sản phẩm hay không trước khi bỏ qua."
+
+### 5.2 Giải pháp: Tín hiệu Hover Dwell
+
+"Tín hiệu Hover giống như việc **quan sát ngôn ngữ cơ thể** của khách hàng trong cửa hàng thực tế. Khách hàng *cầm món hàng lên xem rồi đặt xuống* (Hover ≥ 1.5s) có giá trị thông tin cao hơn rất nhiều so với khách *đi thẳng qua quầy hàng* (Ignored)."
+
+**Phễu mới 5 bước:**
+
+```
+Recommended → Hovered (≥1.5s) → Clicked → Added to Cart → Purchased
+```
+
+### 5.3 Thiết kế trọng số
+
+| Hành vi | Trọng số | Lý do |
+|---|---|---|
+| `purchased` | 1.0 | Chuyển đổi hoàn toàn |
+| `added_to_cart` | 0.5 | Ý định mua rõ ràng |
+| `clicked` | 0.2 | Hành động chủ đích |
+| **`hovered`** | **0.1** | **Sự quan tâm thụ động — bằng ½ click** |
+
+"Tại sao hovered = 0.1 mà không phải cao hơn? Vì nếu đặt bằng clicked (0.2), thì mỗi lần khách *vô tình rê chuột qua* sẽ bị hệ thống đánh giá ngang bằng với *click vào xem chi tiết* — làm nhiễu dữ liệu huấn luyện."
+
+### 5.4 Xử lý Mobile (Graceful Degradation)
+
+"Do thiết bị cảm ứng không có hover event — đây là giới hạn phần cứng — hệ thống được thiết kế linh hoạt: trên **Desktop** phễu 5 bước cho AI học nhanh hơn, trên **Mobile** phễu 4 bước như cũ, Weight Learner vẫn hoạt động bình thường vì `hovered × 0.1 = 0`."
+
+### 5.5 Phương hướng mở rộng tương lai
 
 1. **Từ Rule-based lên Sequence-Aware Deep Learning:** Hiện tại, Session Personalization (δ) chỉ dùng Rule-based cứng để cộng điểm (Ví dụ: +0.15 cho cụm Lẩu Bò). Tương lai, em sẽ thay thế bằng kiến trúc **Mạng nơ-ron hồi quy (GRU) hoặc Transformer** để AI tự động học chuỗi hành vi lướt web của khách hàng theo thời gian thực.
 

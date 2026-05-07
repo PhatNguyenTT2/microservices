@@ -35,6 +35,7 @@ module.exports = function statsRoutes({ pool, hybridService, nightlyBatch, weigh
             }
 
             const totalRecommended = actionMap.recommended || 0;
+            const totalHovered = actionMap.hovered || 0;
             const totalClicked = actionMap.clicked || 0;
             const totalAddedToCart = actionMap.added_to_cart || 0;
             const totalPurchased = actionMap.purchased || 0;
@@ -43,6 +44,7 @@ module.exports = function statsRoutes({ pool, hybridService, nightlyBatch, weigh
             const { rows: sourceStats } = await pool.query(`
                 SELECT source,
                     COUNT(*) FILTER (WHERE action = 'recommended')::int AS recommended,
+                    COUNT(*) FILTER (WHERE action = 'hovered')::int AS hovered,
                     COUNT(*) FILTER (WHERE action = 'clicked')::int AS clicked,
                     COUNT(*) FILTER (WHERE action = 'purchased')::int AS purchased
                 FROM recommendation_feedback
@@ -54,8 +56,10 @@ module.exports = function statsRoutes({ pool, hybridService, nightlyBatch, weigh
             for (const r of sourceStats) {
                 sourceBreakdown[r.source] = {
                     recommended: r.recommended,
+                    hovered: r.hovered,
                     clicked: r.clicked,
                     purchased: r.purchased,
+                    hoverRate: r.recommended > 0 ? Math.round((r.hovered / r.recommended) * 10000) / 10000 : 0,
                     ctr: r.recommended > 0 ? Math.round((r.clicked / r.recommended) * 10000) / 10000 : 0,
                     cvr: r.recommended > 0 ? Math.round((r.purchased / r.recommended) * 10000) / 10000 : 0
                 };
@@ -73,11 +77,14 @@ module.exports = function statsRoutes({ pool, hybridService, nightlyBatch, weigh
                     period: { days, storeId },
                     funnel: {
                         totalRecommended,
+                        totalHovered,
                         totalClicked,
                         totalAddedToCart,
                         totalPurchased
                     },
                     rates: {
+                        hoverRate: totalRecommended > 0
+                            ? Math.round((totalHovered / totalRecommended) * 10000) / 10000 : 0,
                         clickThroughRate: totalRecommended > 0
                             ? Math.round((totalClicked / totalRecommended) * 10000) / 10000 : 0,
                         addToCartRate: totalRecommended > 0

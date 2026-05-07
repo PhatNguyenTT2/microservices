@@ -200,8 +200,15 @@ CREATE TABLE IF NOT EXISTS recommendation_feedback (
     action TEXT NOT NULL,
     session_id TEXT,
     recommendation_score NUMERIC,
+    metadata JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migration: Add metadata column if table already exists
+DO $$ BEGIN
+    ALTER TABLE recommendation_feedback ADD COLUMN metadata JSONB;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_feedback_user
     ON recommendation_feedback(user_id, store_id, created_at DESC);

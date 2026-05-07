@@ -137,3 +137,13 @@ EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_order_detail_product ON sale_order_detail(product_id);
+
+-- ==========================================
+-- MIGRATION: Allow NULL customer_id for walk-in/guest POS orders
+-- Industry standard: customer_id IS NULL = walk-in customer
+-- Statistics: WHERE customer_id IS NULL → "Walk-in Sales"
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE sale_order ALTER COLUMN customer_id DROP NOT NULL;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;

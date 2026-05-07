@@ -21,7 +21,7 @@ module.exports = function feedbackRoutes(hybridService) {
             }
 
             const validSources = ['content', 'cf', 'apriori', 'session'];
-            const validActions = ['recommended', 'clicked', 'added_to_cart', 'purchased'];
+            const validActions = ['recommended', 'hovered', 'clicked', 'added_to_cart', 'purchased'];
 
             if (!validSources.includes(source)) {
                 return res.status(400).json({
@@ -36,9 +36,13 @@ module.exports = function feedbackRoutes(hybridService) {
                 });
             }
 
+            // Optional: hover dwell duration in ms (for future analysis)
+            const dwellTimeMs = req.body.dwellTimeMs || null;
+
             await hybridService.recordFeedback(
                 userId || null, productId, storeId, source, action,
-                sessionId || null, score || null
+                sessionId || null, score || null,
+                dwellTimeMs ? { dwellTimeMs } : null
             );
 
             logger.info({ userId, productId, source, action }, 'Feedback recorded');

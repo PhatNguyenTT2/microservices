@@ -45,13 +45,15 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    subgraph "Phễu chuyển đổi"
-        R["Recommended"] --> CL["Clicked"]
+    subgraph "Phễu chuyển đổi (5 bước)"
+        R["Recommended"] --> HV["Hovered\n(≥1.5s dwell)"]
+        HV --> CL["Clicked"]
         CL --> AC["Added to Cart"]
         AC --> P["Purchased"]
     end
 
     P --> |"ORDER_CONFIRMED\n(24h attribution)"| FB["recommendation_feedback"]
+    HV --> |"POST /feedback\n(action=hovered)"| FB
     CL --> |"POST /feedback"| FB
     AC --> |"POST /feedback"| FB
     R --> |"auto-track"| FB
@@ -64,6 +66,7 @@ flowchart LR
     style FB fill:#ef4444,color:#fff
     style WL fill:#f59e0b,color:#000
     style EW fill:#10b981,color:#fff
+    style HV fill:#6366f1,color:#fff
 ```
 
 ### 1.4 Database Schema — Chi tiết
@@ -194,6 +197,7 @@ Hệ thống sử dụng **10 bảng** chia thành 5 nhóm chức năng. Dưới
 | `action` | TEXT | **Hành động**: `'recommended'` → `'clicked'` → `'added_to_cart'` → `'purchased'`. Phễu chuyển đổi |
 | `session_id` | TEXT | Session liên kết — nhóm feedback theo phiên chat |
 | `recommendation_score` | NUMERIC | `final_score` từ Ensemble — đánh giá "độ tự tin" của hệ thống khi gợi ý |
+| `metadata` | JSONB | Dữ liệu bổ sung (VD: `{"dwellTimeMs": 2300}` cho hover events) |
 | `created_at` | TIMESTAMPTZ | Thời điểm — dùng cho 24h attribution window khi nhận `ORDER_CONFIRMED` |
 
 **Bảng `ensemble_weights`** — Trọng số hiện tại (1 row per store):
@@ -547,9 +551,18 @@ User VIP hỏi "có thịt bò không?", weights: a=0.40, b=0.25, g=0.25, d=0.10
 **Weighted Conversion Score** per source:
 
 ```
-score(source) = purchased*1.0 + added_to_cart*0.5 + clicked*0.2
+score(source) = purchased×1.0 + added_to_cart×0.5 + clicked×0.2 + hovered×0.1
 rate(source)  = score(source) / recommended_count(source)
 ```
+
+**Trọng số hành vi (Behavior Weight Rationale)**:
+
+| Hành vi | Trọng số | Lý do |
+|---|---|---|
+| `purchased` | 1.0 | Chuyển đổi hoàn toàn — hành động mạnh nhất |
+| `added_to_cart` | 0.5 | Ý định mua rõ ràng nhưng chưa chốt |
+| `clicked` | 0.2 | Quan tâm đủ để nhấn xem chi tiết |
+| `hovered` | 0.1 | Sự quan tâm thụ động — dừng lại xem nhưng chưa hành động (≥1.5s dwell) |
 
 **New Weight**:
 
@@ -573,39 +586,40 @@ smoothed = 0.8 * current_weight + 0.2 * raw_weight
 
 **Feedback data** (30 days):
 
-| Source | Recommended | Clicked | Added to Cart | Purchased |
-|---|---|---|---|---|
-| content | 800 | 120 | 30 | 8 |
-| cf | 250 | 40 | 15 | 5 |
-| apriori | 150 | 15 | 8 | 3 |
+| Source | Recommended | Hovered | Clicked | Added to Cart | Purchased |
+|---|---|---|---|---|---|
+| content | 800 | 200 | 120 | 30 | 8 |
+| cf | 250 | 80 | 40 | 15 | 5 |
+| apriori | 150 | 35 | 15 | 8 | 3 |
 
 **Weighted conversion scores**:
 
 ```
-content: 8*1.0 + 30*0.5 + 120*0.2 = 47   -> rate = 47/800  = 0.0588
-cf:      5*1.0 + 15*0.5 + 40*0.2  = 20.5 -> rate = 20.5/250 = 0.0820
-apriori: 3*1.0 + 8*0.5 + 15*0.2   = 10   -> rate = 10/150   = 0.0667
+content: 8×1.0 + 30×0.5 + 120×0.2 + 200×0.1 = 67   -> rate = 67/800  = 0.0838
+cf:      5×1.0 + 15×0.5 + 40×0.2  + 80×0.1  = 28.5 -> rate = 28.5/250 = 0.1140
+apriori: 3×1.0 + 8×0.5 + 15×0.2   + 35×0.1  = 13.5 -> rate = 13.5/150  = 0.0900
 ```
 
-**Total rate** = 0.2075
+**Total rate** = 0.2878
 
-**Raw new weights** (d=0.10, available=0.90):
+**Raw new weights** (δ=0.10, available=0.90):
 
 ```
-a_raw = (0.0588 / 0.2075) * 0.90 = 0.2551
-b_raw = (0.0820 / 0.2075) * 0.90 = 0.3556
-g_raw = (0.0667 / 0.2075) * 0.90 = 0.2893
+α_raw = (0.0838 / 0.2878) × 0.90 = 0.2620
+β_raw = (0.1140 / 0.2878) × 0.90 = 0.3565
+γ_raw = (0.0900 / 0.2878) × 0.90 = 0.2815
 ```
 
 **Smoothing** (80% old + 20% new):
 
 ```
-a_new = 0.8*0.40 + 0.2*0.2551 = 0.3710
-b_new = 0.8*0.25 + 0.2*0.3556 = 0.2711
-g_new = 0.8*0.25 + 0.2*0.2893 = 0.2579
+α_new = 0.8×0.40 + 0.2×0.2620 = 0.3724
+β_new = 0.8×0.25 + 0.2×0.3565 = 0.2713
+γ_new = 0.8×0.25 + 0.2×0.2815 = 0.2563
 ```
 
--> CF (b) tăng từ 0.25->0.27 vì có conversion rate cao nhất.
+→ CF (β) tăng từ 0.25→0.27 vì có conversion rate cao nhất (0.114).
+→ So với công thức cũ (không có hover): hover data bổ sung thêm 20 + 8 + 3.5 = 31.5 điểm nữa, giúp AI có thêm tín hiệu để phân biệt hiệu quả giữa các sources.
 
 ---
 
@@ -638,6 +652,7 @@ Nếu `confidence < 0.4` hoặc top/second ratio < 1.5 -> trả về `exploring`
 
 ```
 Chatbot recommend (auto)  -> INSERT action='recommended', score=final_score
+User hover ProductCard 2s -> POST /chatbot/feedback -> action='hovered', dwellTimeMs=2000
 User click ProductCard    -> POST /chatbot/feedback -> action='clicked'
 User add to cart          -> POST /chatbot/feedback -> action='added_to_cart'
 User purchase (24h)       -> ORDER_CONFIRMED event  -> action='purchased'
@@ -660,6 +675,51 @@ for (item of orderItems) {
     }
 }
 ```
+
+### 8.3 Hành Vi Rê Chuột — Hover Dwell Behavior (Phase 5B)
+
+Hành vi **Hover Dwell** (rê chuột và dừng lại trên sản phẩm) là tín hiệu **implicit feedback** bổ sung, lấp đầy khoảng trống dữ liệu giữa `recommended` và `clicked` trong phễu chuyển đổi.
+
+#### 8.3.1 Tại sao Hover là tín hiệu có giá trị?
+
+Tương tự như ngôn ngữ cơ thể trong bán lẻ truyền thống: khách hàng **cầm món hàng lên xem rồi đặt xuống** (hover ≥ 1.5s) thể hiện sự quan tâm cao hơn nhiều so với khách **đi thẳng qua quầy** (scroll past, < 500ms).
+
+#### 8.3.2 Dwell Time Threshold (Ngưỡng thời gian)
+
+| Khoảng thời gian | Phân loại | Hành động hệ thống |
+|---|---|---|
+| < 500ms | **Noise** — lướt chuột ngang qua | Bỏ qua (không ghi nhận) |
+| 500ms – 1000ms | **Scanning** — mắt đang quét thông tin | Bỏ qua (chưa đủ ngưỡng) |
+| **≥ 1500ms** | **Attention** — đang đọc kỹ, xem giá | ✅ **Ghi nhận `action='hovered'`** |
+
+#### 8.3.3 Thiết kế chống nhiễu (Deduplication)
+
+- **1 lần/product/session**: Nếu user hover cùng 1 sản phẩm nhiều lần trong 1 session, chỉ ghi nhận lần đầu tiên
+- **Frontend gate**: Đặt cờ `isHoverTracked = true` cho product ID sau lần gửi đầu tiên, chặn các lần sau
+- **Ý nghĩa**: Cột `hovered` phản ánh *"Số mặt hàng mà khách đã dành sự quan tâm"*, không phải *"Số lần con trỏ chuột chạy qua"*
+
+#### 8.3.4 Graceful Degradation trên Mobile
+
+Do thiết bị cảm ứng **không có hover event** (giới hạn phần cứng), hệ thống được thiết kế linh hoạt:
+
+| Nền tảng | Phễu chuyển đổi | Số bước |
+|---|---|---|
+| **Desktop/Laptop** | recommended → hovered → clicked → cart → purchased | 5 bước (tối đa dữ liệu) |
+| **Mobile/Tablet** | recommended → clicked → cart → purchased | 4 bước (tương thích ngược) |
+
+Weight Learner hoạt động bình thường trên cả 2 nền tảng: nếu `hovered = 0`, thành phần `hovered × 0.1` đơn giản bằng 0 — không ảnh hưởng đến các trọng số khác.
+
+#### 8.3.5 Metadata mở rộng
+
+Mỗi hover event ghi nhận thêm `dwellTimeMs` trong cột `metadata` (JSONB):
+
+```json
+{
+  "dwellTimeMs": 2300
+}
+```
+
+Dữ liệu này phục vụ **phân tích tương lai**: tương quan giữa dwell time và tỷ lệ chuyển đổi (VD: *Hover > 5s có tỷ lệ mua 3x so với hover 1.5s?*).
 
 ---
 
@@ -765,12 +825,13 @@ Khách mua ba chỉ bò thường mua kèm nấm kim châm (60% mua kèm)!"
 
 ```
 1. Chatbot auto-track -> 3 records action='recommended'
-2. User click "Nam kim cham" -> POST /feedback action='clicked'
-3. User add to cart -> POST /feedback action='added_to_cart'
-4. User checkout -> ORDER_CONFIRMED event -> 24h attribution
+2. User hover "Nấm kim châm" 2.3s -> POST /feedback action='hovered', dwellTimeMs=2300
+3. User click "Nấm kim châm" -> POST /feedback action='clicked'
+4. User add to cart -> POST /feedback action='added_to_cart'
+5. User checkout -> ORDER_CONFIRMED event -> 24h attribution
    -> product_id=3 found in recommendations -> action='purchased'
-5. Nightly 2:00 AM -> WeightLearner.learn() -> g(apriori) increases
-6. Dashboard -> WeightEvolutionChart shows new data point
+6. Nightly 2:00 AM -> WeightLearner.learn() -> công thức mới bao gồm hovered×0.1
+7. Dashboard -> ConversionFunnel hiển thị 5 bước: Recommended→Hovered→Clicked→Cart→Purchased
 ```
 
 ### 11.5 Kiểm chứng triển khai thành công

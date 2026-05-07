@@ -74,8 +74,6 @@ CREATE INDEX IF NOT EXISTS idx_employee_store_id ON employee(store_id);
 
 -- Bảng Customer: Chain-level (Không thuộc cửa hàng nào)
 -- user_id NULL = walk-in customer (không cần tài khoản đăng nhập)
--- DROP old schema (user_id PK, no address) — data is empty, safe to recreate
-DROP TABLE IF EXISTS customer;
 CREATE TABLE IF NOT EXISTS customer (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     user_id BIGINT REFERENCES user_account(id) ON DELETE SET NULL,

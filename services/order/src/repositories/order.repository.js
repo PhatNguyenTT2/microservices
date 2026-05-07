@@ -72,6 +72,7 @@ class OrderRepository {
       const fieldMap = {
         status: 'status',
         payment_status: 'payment_status',
+        customer_id: 'customer_id',
         delivery_type: 'delivery_type',
         address: 'address',
         shipping_fee: 'shipping_fee',

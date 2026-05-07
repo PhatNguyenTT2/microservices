@@ -29,7 +29,6 @@ function createInventoryRouter(inventoryService, inventoryRepo, { catalogService
                 .filter(b => b.status === 'active' && parseInt(b.total_on_shelf) > 0)
                 .map(b => ({
                     id: b.id,
-                    batchCode: `B-${b.id}`,
                     unitPrice: parseFloat(b.unit_price) || 0,
                     discountPercentage: parseFloat(b.discount_percentage) || 0,
                     mfgDate: b.mfg_date,
@@ -232,11 +231,18 @@ function createInventoryRouter(inventoryService, inventoryRepo, { catalogService
 
             const batches = await inventoryRepo.getBatchesByProduct(storeId, productId);
 
-            const formatted = batches.map(b => ({
+            const formatted = batches
+                .sort((a, b) => {
+                    if (!a.expiry_date) return 1;
+                    if (!b.expiry_date) return -1;
+                    return new Date(a.expiry_date) - new Date(b.expiry_date);
+                })
+                .map(b => ({
                 id: b.id,
                 productId: b.product_id,
                 costPrice: parseFloat(b.cost_price) || 0,
                 unitPrice: parseFloat(b.unit_price) || 0,
+                discountPercentage: parseFloat(b.discount_percentage) || 0,
                 quantity: b.quantity,
                 mfgDate: b.mfg_date,
                 expiryDate: b.expiry_date,
@@ -335,7 +341,6 @@ function createInventoryRouter(inventoryService, inventoryRepo, { catalogService
                 id: row.id,
                 batchId: {
                     id: row.product_batch_id,
-                    batchCode: `B-${row.product_batch_id}`,
                     productId: row.product_id,
                     costPrice: parseFloat(row.cost_price) || 0,
                     unitPrice: parseFloat(row.unit_price) || 0,

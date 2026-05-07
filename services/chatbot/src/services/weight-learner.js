@@ -53,7 +53,8 @@ class WeightLearner {
                 COUNT(*) FILTER (WHERE action = 'recommended') AS recommended,
                 COUNT(*) FILTER (WHERE action = 'purchased') AS purchased,
                 COUNT(*) FILTER (WHERE action = 'clicked') AS clicked,
-                COUNT(*) FILTER (WHERE action = 'added_to_cart') AS added_to_cart
+                COUNT(*) FILTER (WHERE action = 'added_to_cart') AS added_to_cart,
+                COUNT(*) FILTER (WHERE action = 'hovered') AS hovered
             FROM recommendation_feedback
             WHERE store_id = $1 AND created_at > NOW() - INTERVAL '30 days'
             GROUP BY source
@@ -79,10 +80,11 @@ class WeightLearner {
             const recommended = Number(stat?.recommended || 0);
             const purchased = Number(stat?.purchased || 0);
 
-            // Weighted conversion: purchase×1.0 + cart×0.5 + click×0.2
+            // Weighted conversion: purchase×1.0 + cart×0.5 + click×0.2 + hover×0.1
             const clicked = Number(stat?.clicked || 0);
             const addedToCart = Number(stat?.added_to_cart || 0);
-            const weightedConversions = purchased * 1.0 + addedToCart * 0.5 + clicked * 0.2;
+            const hovered = Number(stat?.hovered || 0);
+            const weightedConversions = purchased * 1.0 + addedToCart * 0.5 + clicked * 0.2 + hovered * 0.1;
 
             const rate = recommended > 0 ? weightedConversions / recommended : 0;
             conversionRates[weightKey] = rate;

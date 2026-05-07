@@ -5,6 +5,117 @@ function createWarehouseRouter(warehouseService) {
     const router = express.Router();
 
     // ==========================================
+    // POS STORE MAP — OPTIMIZED SINGLE-QUERY ENDPOINT
+    // ==========================================
+
+    /**
+     * GET /store-map-data — All store_shelf blocks with product summaries per location
+     * Single optimized query: replaces N+1 location detail calls
+     * Returns: blocks[] → locations[] → products[] (name, totalOnShelf)
+     */
+    router.get('/store-map-data', verifyToken, async (req, res, next) => {
+        try {
+            const storeId = req.user?.storeId ?? 1;
+
+            // 1. Fetch store_shelf blocks with locations
+            const blocks = await warehouseService.getBlocks(storeId, { type: 'store_shelf' });
+
+            // 2. Collect all location IDs that have inventory
+            const allLocationIds = [];
+            blocks.forEach(b => {
+                (b.locations || []).forEach(l => {
+                    allLocationIds.push(l.id);
+                });
+            });
+
+            // 3. Single query: get product summaries for ALL locations at once
+            let locationProductMap = {};
+            if (allLocationIds.length > 0) {
+                const query = `
+                    SELECT ii.location_id,
+                           pb.product_id,
+                           SUM(ii.quantity_on_shelf) as total_on_shelf,
+                           MIN(pb.unit_price) as unit_price,
+                           MIN(pb.expiry_date) as earliest_expiry
+                    FROM inventory_item ii
+                    JOIN product_batch pb ON ii.product_batch_id = pb.id
+                    WHERE ii.location_id = ANY($1)
+                      AND ii.quantity_on_shelf > 0
+                      AND pb.store_id = $2
+                    GROUP BY ii.location_id, pb.product_id
+                    ORDER BY ii.location_id, MIN(pb.expiry_date) ASC
+                `;
+                const { rows } = await warehouseService.pool.query(query, [allLocationIds, storeId]);
+
+                rows.forEach(row => {
+                    const locId = row.location_id;
+                    if (!locationProductMap[locId]) locationProductMap[locId] = [];
+                    locationProductMap[locId].push({
+                        productId: row.product_id,
+                        totalOnShelf: parseInt(row.total_on_shelf) || 0,
+                        unitPrice: parseFloat(row.unit_price) || 0,
+                        earliestExpiry: row.earliest_expiry
+                    });
+                });
+            }
+
+            // 4. Fetch product names from catalog (single call)
+            let productNameMap = {};
+            const allProductIds = [...new Set(
+                Object.values(locationProductMap).flat().map(p => p.productId)
+            )];
+            if (allProductIds.length > 0) {
+                try {
+                    const authToken = req.headers.authorization?.replace('Bearer ', '');
+                    const catalogUrl = req.app.locals?.catalogServiceUrl
+                        || process.env.CATALOG_SERVICE_URL
+                        || 'http://catalog:3002';
+                    const axios = require('axios');
+                    const catalogRes = await axios.get(`${catalogUrl}/api/products`, {
+                        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+                        params: { isActive: true }
+                    });
+                    const products = catalogRes.data?.data?.products || [];
+                    products.forEach(p => { productNameMap[p.id] = p.name; });
+                } catch (e) {
+                    console.error('Store map: failed to fetch product names:', e.message);
+                }
+            }
+
+            // 5. Format response
+            const formatted = blocks.map(b => ({
+                id: b.id,
+                name: b.name,
+                type: b.type,
+                rows: b.rows,
+                cols: b.cols,
+                columnGaps: b.column_gaps || [],
+                locations: (b.locations || []).map(l => {
+                    const locProducts = (locationProductMap[l.id] || []).map(p => ({
+                        ...p,
+                        productName: productNameMap[p.productId] || `Product #${p.productId}`
+                    }));
+                    return {
+                        id: l.id,
+                        blockId: l.block_id,
+                        name: l.name,
+                        position: l.position,
+                        maxCapacity: l.max_capacity,
+                        isActive: l.is_active,
+                        occupiedCapacity: parseInt(l.occupied_capacity) || 0,
+                        inventoryItemCount: parseInt(l.inventory_item_count) || 0,
+                        products: locProducts
+                    };
+                })
+            }));
+
+            res.json({ success: true, data: formatted });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    // ==========================================
     // BLOCK ENDPOINTS
     // ==========================================
 

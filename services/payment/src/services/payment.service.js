@@ -1,8 +1,53 @@
 const crypto = require('crypto');
-const querystring = require('querystring');
 const { ValidationError, NotFoundError, AppError } = require('../../../../shared/common/errors');
 const outbox = require('../../../../shared/outbox');
 const EVENT = require('../../../../shared/event-bus/eventTypes');
+
+/**
+ * Remove Vietnamese diacritics from a string.
+ * VNPay spec requires vnp_OrderInfo without accented characters.
+ */
+function removeDiacritics(str) {
+    return str
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/Đ/g, 'D');
+}
+
+/**
+ * Generate date string in yyyyMMddHHmmss format, GMT+7.
+ * Docker containers use UTC, so we manually offset +7 hours.
+ */
+function getVNPayDate(date) {
+    const vnTime = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return vnTime.getUTCFullYear() +
+        ('0' + (vnTime.getUTCMonth() + 1)).slice(-2) +
+        ('0' + vnTime.getUTCDate()).slice(-2) +
+        ('0' + vnTime.getUTCHours()).slice(-2) +
+        ('0' + vnTime.getUTCMinutes()).slice(-2) +
+        ('0' + vnTime.getUTCSeconds()).slice(-2);
+}
+
+/**
+ * Verify HMAC-SHA512 checksum from VNPay callback data.
+ * Recreates the hash from sorted params and compares with vnp_SecureHash.
+ */
+function verifyVNPayChecksum(params, secureHash) {
+    const secretKey = process.env.VNP_HASHSECRET;
+    const sortedKeys = Object.keys(params).sort();
+    const searchParams = new URLSearchParams();
+    sortedKeys.forEach(key => {
+        const val = params[key];
+        if (val !== undefined && val !== null && val !== '') {
+            searchParams.append(key, String(val));
+        }
+    });
+    const signData = searchParams.toString();
+    const hmac = crypto.createHmac('sha512', secretKey);
+    const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest('hex');
+    return signed === secureHash;
+}
 
 class PaymentService {
     constructor(paymentRepo, vnpayRepo, pool, eventBus) {
@@ -91,31 +136,65 @@ class PaymentService {
                 created_by
             });
             
-            // 2. Build VNPay params (Mock parameters for now)
+            // 2. Build VNPay params — mirrors vnpay npm library algorithm
             const txnRef = `TXN${payment.id}_${Date.now()}`;
+
+            const now = new Date();
+            const createDate = getVNPayDate(now);
+
+            // P1: vnp_ExpireDate — 15 minutes from now (mandatory per VNPay spec)
+            const expireTime = new Date(now.getTime() + 15 * 60 * 1000);
+            const expireDate = getVNPayDate(expireTime);
+
+            const vnpUrl = (process.env.VNP_URL || 'https://sandbox.vnpayment.vn') + '/paymentv2/vpcpay.html';
+            const appUrl = (process.env.APP_URL || '').replace(/\/$/, '');
+            const returnUrl = `${appUrl}/api/payments/vnpay/return`;
+
+            // P2: Sanitize orderInfo — VNPay requires no diacritics/special chars
+            const rawOrderInfo = notes || `Thanh toan don hang ${reference_id}`;
+            const safeOrderInfo = removeDiacritics(rawOrderInfo).replace(/[^a-zA-Z0-9 .,_-]/g, '');
+
             const vnp_Params = {
-                vnp_Version: '2.1.0',
-                vnp_Command: 'pay',
-                vnp_TmnCode: process.env.VNPAY_TMN_CODE || 'DEMOCODE',
-                vnp_Amount: amount * 100, // VNPay expects amount * 100
-                vnp_CreateDate: new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14),
-                vnp_CurrCode: 'VND',
-                vnp_IpAddr: ipAddr,
-                vnp_Locale: 'vn',
-                vnp_OrderInfo: `Thanh toan don hang ${reference_id}`,
-                vnp_OrderType: 'other',
-                vnp_ReturnUrl: process.env.VNPAY_RETURN_URL || 'http://localhost:3007/api/payments/vnpay/return',
-                vnp_TxnRef: txnRef
+                'vnp_Version': '2.1.0',
+                'vnp_Command': 'pay',
+                'vnp_TmnCode': process.env.VNP_TMNCODE,
+                'vnp_Amount': Math.round(amount * 100),
+                'vnp_CurrCode': 'VND',
+                'vnp_CreateDate': createDate,
+                'vnp_ExpireDate': expireDate,
+                'vnp_IpAddr': ipAddr || '127.0.0.1',
+                'vnp_Locale': 'vn',
+                'vnp_OrderInfo': safeOrderInfo,
+                'vnp_OrderType': 'billpayment',
+                'vnp_ReturnUrl': returnUrl,
+                'vnp_TxnRef': txnRef
             };
 
-            // Sign data
-            const signData = querystring.stringify(vnp_Params, { encode: false });
-            const secretKey = process.env.VNPAY_HASH_SECRET || 'DEMOSECRET';
+            // 3. Sort keys alphabetically (VNPay REQUIRES sorted keys for HMAC)
+            const sortedKeys = Object.keys(vnp_Params).sort();
+
+            // 4. Use URLSearchParams for proper URL-encoding and & separator
+            const searchParams = new URLSearchParams();
+            sortedKeys.forEach(key => {
+                const val = vnp_Params[key];
+                if (val !== undefined && val !== null && val !== '') {
+                    searchParams.append(key, String(val));
+                }
+            });
+
+            // 5. Sign the URL-ENCODED string (must match what VNPay receives)
+            const signData = searchParams.toString();
+            const secretKey = process.env.VNP_HASHSECRET;
             const hmac = crypto.createHmac('sha512', secretKey);
             const signed = hmac.update(Buffer.from(signData, 'utf-8')).digest('hex');
-            vnp_Params['vnp_SecureHash'] = signed;
 
-            const paymentUrl = (process.env.VNPAY_URL || 'https://sandbox.vnpayment.vn/paymentv2/vpcpay.html') + '?' + querystring.stringify(vnp_Params, { encode: false });
+            // 6. Append secure hash
+            searchParams.append('vnp_SecureHash', signed);
+
+            // 7. Build final URL using URL class
+            const paymentUrlObj = new URL(vnpUrl);
+            paymentUrlObj.search = searchParams.toString();
+            const paymentUrl = paymentUrlObj.toString();
 
             // 3. Lưu log giao dịch VNPay
             const vnpayTxn = await this.vnpayRepo.create({
@@ -139,17 +218,27 @@ class PaymentService {
 
     // Core Logic 3: Xử lý IPN Webhook từ VNPay (Zone 1 Transaction)
     async processVNPayIPN(ipnData) {
-        // Validation secure hash omitted for brevity in this MVP
+        // P0: Extract and verify HMAC-SHA512 checksum BEFORE any DB operations
         const secureHash = ipnData.vnp_SecureHash;
         delete ipnData.vnp_SecureHash;
         delete ipnData.vnp_SecureHashType;
+
+        if (!secureHash || !verifyVNPayChecksum(ipnData, secureHash)) {
+            return { RspCode: '97', Message: 'Checksum failed' };
+        }
         
         // Find transaction
         const txnRef = ipnData.vnp_TxnRef;
         const vnpayTxn = await this.vnpayRepo.findByTxnRef(txnRef);
         
-        if (!vnpayTxn) throw new NotFoundError('Transaction not found');
-        if (vnpayTxn.ipn_verified) return { RspCode: '02', Message: 'Order already confirmed' }; // VNPay standard response
+        if (!vnpayTxn) return { RspCode: '01', Message: 'Order not found' };
+        if (vnpayTxn.ipn_verified) return { RspCode: '02', Message: 'Order already confirmed' };
+
+        // Verify amount matches DB record (prevent amount tampering)
+        const ipnAmount = parseInt(ipnData.vnp_Amount, 10);
+        if (ipnAmount !== vnpayTxn.vnp_amount) {
+            return { RspCode: '04', Message: 'Invalid amount' };
+        }
         
         const client = await this.pool.connect();
         try {

@@ -39,6 +39,20 @@ function createProductRouter(productService) {
         }
     });
 
+    // GET product by barcode (EAN-13 or custom) — public read access
+    // Must be before /:id to avoid route conflict
+    router.get('/barcode/:barcode', async (req, res, next) => {
+        try {
+            const product = await productService.getProductByBarcode(req.params.barcode);
+            res.json({
+                success: true,
+                data: { product }
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
     // GET product by ID — public read access
     router.get('/:id', async (req, res, next) => {
         try {

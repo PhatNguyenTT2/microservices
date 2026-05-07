@@ -239,6 +239,74 @@ function createPaymentRouter(paymentService) {
         }
     });
 
+    // GET /payments/vnpay/check-status/:ref — lookup VNPay transaction status by txn ref
+    router.get('/vnpay/check-status/:ref', verifyToken, async (req, res, next) => {
+        try {
+            const txnRef = req.params.ref;
+            const vnpayTxn = await paymentService.vnpayRepo.findByTxnRef(txnRef);
+
+            if (!vnpayTxn) {
+                return res.status(404).json({
+                    status: 'error',
+                    message: 'VNPay transaction not found'
+                });
+            }
+
+            res.json({
+                status: 'success',
+                data: {
+                    id: vnpayTxn.id,
+                    paymentId: vnpayTxn.payment_id,
+                    orderId: vnpayTxn.reference_id,
+                    txnRef: vnpayTxn.vnp_txn_ref,
+                    amount: vnpayTxn.vnp_amount / 100, // VNPay stores amount * 100
+                    txnStatus: vnpayTxn.status,
+                    responseCode: vnpayTxn.vnp_response_code || null,
+                    bankCode: vnpayTxn.vnp_bank_code || null,
+                    ipnVerified: vnpayTxn.ipn_verified || false
+                }
+            });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    // GET /payments/vnpay/return — VNPay user redirect after payment (Public — NO auth)
+    // VNPay redirects user here after payment. We redirect to frontend POS with status params.
+    router.get('/vnpay/return', async (req, res) => {
+        try {
+            const vnpResponseCode = req.query.vnp_ResponseCode;
+            const vnpTxnRef = req.query.vnp_TxnRef;
+            const isSuccess = vnpResponseCode === '00';
+
+            // Find the orderId from the VNPay transaction
+            let orderId = '';
+            if (vnpTxnRef) {
+                try {
+                    const vnpayTxn = await paymentService.vnpayRepo.findByTxnRef(vnpTxnRef);
+                    if (vnpayTxn) {
+                        orderId = vnpayTxn.reference_id || '';
+                    }
+                } catch (e) {
+                    console.warn('Failed to lookup VNPay transaction:', e.message);
+                }
+            }
+
+            const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '') + '/pos';
+
+            if (isSuccess) {
+                return res.redirect(`${frontendUrl}?payment=success&ref=${orderId}`);
+            } else {
+                const message = encodeURIComponent('Thanh toán VNPay thất bại');
+                return res.redirect(`${frontendUrl}?payment=failed&code=${vnpResponseCode}&message=${message}`);
+            }
+        } catch (error) {
+            console.error('VNPay return redirect error:', error);
+            const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '') + '/pos';
+            return res.redirect(`${frontendUrl}?payment=failed&message=${encodeURIComponent('Lỗi xử lý thanh toán')}`);
+        }
+    });
+
     return router;
 }
 

@@ -272,13 +272,14 @@ class HybridRecommendationService {
     /**
      * Record recommendation feedback for weight learning
      */
-    async recordFeedback(userId, productId, storeId, source, action, sessionId = null, score = null) {
+    async recordFeedback(userId, productId, storeId, source, action, sessionId = null, score = null, metadata = null) {
         try {
             await this.pool.query(`
                 INSERT INTO recommendation_feedback 
-                    (user_id, product_id, store_id, source, action, session_id, recommendation_score)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-            `, [userId, productId, storeId, source, action, sessionId, score]);
+                    (user_id, product_id, store_id, source, action, session_id, recommendation_score, metadata)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            `, [userId, productId, storeId, source, action, sessionId, score,
+                metadata ? JSON.stringify(metadata) : null]);
         } catch (err) {
             logger.warn({ err }, 'Hybrid: Failed to record feedback');
         }

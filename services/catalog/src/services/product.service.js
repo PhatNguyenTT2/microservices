@@ -22,6 +22,7 @@ class ProductService {
         if (!row) return null;
         return {
             id: row.id,
+            barcode: row.barcode || null,
             name: row.name,
             image: row.image_url || null,
             unitPrice: Number(row.unit_price) || 0,
@@ -32,6 +33,18 @@ class ProductService {
             vendor: row.vendor || '',
             isPerishable: row.is_perishable || false
         };
+    }
+
+    /**
+     * Generate EAN-13 barcode for internal products
+     * Format: 200 (GS1 internal prefix) + 9-digit padded productId + check digit
+     */
+    generateBarcode(productId) {
+        const base = '200' + String(productId).padStart(9, '0');
+        const digits = base.split('').map(Number);
+        const sum = digits.reduce((s, d, i) => s + d * (i % 2 === 0 ? 1 : 3), 0);
+        const checkDigit = (10 - (sum % 10)) % 10;
+        return base + checkDigit;
     }
 
     async getProducts(filters) {
@@ -87,6 +100,11 @@ class ProductService {
         };
 
         const row = await this.productRepository.create(dbData);
+
+        // Auto-generate EAN-13 barcode if not provided by user
+        const barcode = data.barcode || this.generateBarcode(row.id);
+        await this.productRepository.update(row.id, { barcode });
+
         const product = await this.getProductById(row.id);
 
         if (this.eventBus) {
@@ -164,6 +182,17 @@ class ProductService {
         }
 
         return { message: 'Product deleted successfully' };
+    }
+
+    /**
+     * Find product by barcode (EAN-13 or custom)
+     */
+    async getProductByBarcode(barcode) {
+        const product = await this.productRepository.findByBarcode(barcode);
+        if (!product) {
+            throw new NotFoundError(`Product not found for barcode: ${barcode}`);
+        }
+        return this.formatProduct(product);
     }
 
     /**

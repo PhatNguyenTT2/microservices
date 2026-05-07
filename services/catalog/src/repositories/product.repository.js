@@ -30,7 +30,7 @@ class ProductRepository {
 
         if (filters.search) {
             params.push(`%${filters.search}%`);
-            query += ` AND (p.name ILIKE $${params.length} OR p.vendor ILIKE $${params.length})`;
+            query += ` AND (p.name ILIKE $${params.length} OR p.vendor ILIKE $${params.length} OR p.barcode ILIKE $${params.length})`;
         }
 
         if (filters.isActive !== undefined) {
@@ -68,7 +68,7 @@ class ProductRepository {
 
         if (filters.search) {
             params.push(`%${filters.search}%`);
-            baseWhere += ` AND (p.name ILIKE $${params.length} OR p.vendor ILIKE $${params.length})`;
+            baseWhere += ` AND (p.name ILIKE $${params.length} OR p.vendor ILIKE $${params.length} OR p.barcode ILIKE $${params.length})`;
         }
 
         if (filters.isActive !== undefined) {
@@ -130,20 +130,20 @@ class ProductRepository {
     }
 
     async create(data) {
-        const { category_id, name, image_url, unit_price, vendor, is_active } = data;
+        const { category_id, name, image_url, unit_price, vendor, is_active, barcode } = data;
         const query = `
-            INSERT INTO product (category_id, name, image_url, unit_price, vendor, is_active)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO product (category_id, name, image_url, unit_price, vendor, is_active, barcode)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [
-            category_id, name, image_url || null, unit_price || 0, vendor || null, is_active !== false
+            category_id, name, image_url || null, unit_price || 0, vendor || null, is_active !== false, barcode || null
         ]);
         return rows[0];
     }
 
     async update(id, data) {
-        const { name, image_url, category_id, unit_price, vendor, is_active } = data;
+        const { name, image_url, category_id, unit_price, vendor, is_active, barcode } = data;
         const query = `
             UPDATE product 
             SET name = COALESCE($1, name),
@@ -151,12 +151,13 @@ class ProductRepository {
                 category_id = COALESCE($3, category_id),
                 unit_price = COALESCE($4, unit_price),
                 vendor = COALESCE($5, vendor),
-                is_active = COALESCE($6, is_active)
-            WHERE id = $7
+                is_active = COALESCE($6, is_active),
+                barcode = COALESCE($7, barcode)
+            WHERE id = $8
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [
-            name, image_url, category_id, unit_price, vendor, is_active, id
+            name, image_url, category_id, unit_price, vendor, is_active, barcode, id
         ]);
         return rows[0] || null;
     }
@@ -169,6 +170,17 @@ class ProductRepository {
             RETURNING *
         `;
         const { rows } = await this.pool.query(query, [isActive, id]);
+        return rows[0] || null;
+    }
+
+    async findByBarcode(barcode) {
+        const query = `
+            SELECT p.*, c.name as category_name, c.is_perishable 
+            FROM product p
+            LEFT JOIN category c ON p.category_id = c.id
+            WHERE p.barcode = $1
+        `;
+        const { rows } = await this.pool.query(query, [barcode]);
         return rows[0] || null;
     }
 

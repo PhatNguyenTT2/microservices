@@ -232,6 +232,8 @@ class OrderService {
       const dbData = {};
       if (data.status !== undefined) dbData.status = data.status;
       if (data.paymentStatus !== undefined) dbData.payment_status = data.paymentStatus;
+      if (data.customerId !== undefined) dbData.customer_id = data.customerId;
+      if (data.customer_id !== undefined) dbData.customer_id = data.customer_id;
       if (data.deliveryType !== undefined) dbData.delivery_type = data.deliveryType;
       if (data.address !== undefined) dbData.address = data.address;
       if (data.shippingFee !== undefined) dbData.shipping_fee = data.shippingFee;

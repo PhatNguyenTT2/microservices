@@ -49,4 +49,15 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- ==========================================
+-- MIGRATION: Add barcode column to product
+-- EAN-13 or custom barcode for POS scanning
+-- ==========================================
+DO $$ BEGIN
+    ALTER TABLE product ADD COLUMN barcode TEXT UNIQUE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_product_barcode ON product(barcode);
+
 -- No seed data — data is managed via API
